@@ -154,24 +154,14 @@ class DelayedReadyBridge(FakeBridge):
         self.send_button_checks = 0
 
     async def run_javascript(self, account_name: str, script: str) -> Any:
-        if (
-            "textarea.semi-input-textarea" in script
-            and "return Boolean(textarea)" in script
-        ):
+        if "textarea.semi-input-textarea" in script and "return Boolean(textarea)" in script:
             self.textarea_checks += 1
             if self.textarea_checks < 2:
-                return json.dumps(
-                    {"__doubaoBridge": True, "ok": True, "value": False}
-                )
-        if (
-            "#flow-end-msg-send" in script
-            and "return Boolean(button" in script
-        ):
+                return json.dumps({"__doubaoBridge": True, "ok": True, "value": False})
+        if "#flow-end-msg-send" in script and "return Boolean(button" in script:
             self.send_button_checks += 1
             if self.send_button_checks < 2:
-                return json.dumps(
-                    {"__doubaoBridge": True, "ok": True, "value": False}
-                )
+                return json.dumps({"__doubaoBridge": True, "ok": True, "value": False})
         return await super().run_javascript(account_name, script)
 
 

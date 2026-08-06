@@ -375,9 +375,7 @@ class BrowserAccountPool:
             if failures > 0:
                 backoff = self._snapshot_backoff_seconds(failures)
                 if now - last_attempt < backoff:
-                    cached_error = self._snapshot_last_error.get(
-                        account_id, "账号状态检测退避中"
-                    )
+                    cached_error = self._snapshot_last_error.get(account_id, "账号状态检测退避中")
                     return self._snapshot_error_state(account_id, cached_error)
             self._snapshot_last_attempt[account_id] = now
             try:

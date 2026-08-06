@@ -39,9 +39,7 @@ def main() -> int:
         print("错误：未找到 PLATFORM_ENTRIES 列表", file=sys.stderr)
         return 1
 
-    entry_lines = [
-        f"    {json.dumps(entry, ensure_ascii=False)},\n" for entry in PLATFORM_ENTRIES
-    ]
+    entry_lines = [f"    {json.dumps(entry, ensure_ascii=False)},\n" for entry in PLATFORM_ENTRIES]
     new_block = ["PLATFORM_ENTRIES: list[dict[str, str]] = [\n", *entry_lines, "]\n"]
     new_lines = lines[:start] + new_block + lines[end + 1 :]
     TARGET_FILE.write_text("".join(new_lines), encoding="utf-8")

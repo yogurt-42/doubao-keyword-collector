@@ -14,9 +14,7 @@ def _platform_type_for_result(item: dict[str, Any]) -> str:
     if platform_type:
         return platform_type
     # 如果记录插入时平台类型为空，按当前最新的平台规则再查一次
-    return category_for_url(item.get("link", "")) or platform_category(
-        item.get("platform", "")
-    )
+    return category_for_url(item.get("link", "")) or platform_category(item.get("platform", ""))
 
 
 def build_results_workbook(rows: list[dict[str, Any]]) -> bytes:

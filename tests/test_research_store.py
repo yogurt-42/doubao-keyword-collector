@@ -57,9 +57,7 @@ def test_job_and_results_lifecycle(tmp_path: Path) -> None:
         "keywords": 1,
         "platforms": 1,
     }
-    assert dashboard["platforms"] == [
-        {"platform": "example.com", "type": "", "count": 1}
-    ]
+    assert dashboard["platforms"] == [{"platform": "example.com", "type": "", "count": 1}]
     assert dashboard["long_tail"]["total"] == 0
     assert dashboard["long_tail"]["share"] == 0.0
     assert dashboard["long_tail"]["by_platform"] == []
@@ -152,10 +150,7 @@ def test_existing_platforms_are_reclassified_on_startup(tmp_path: Path) -> None:
     reopened = ResearchStore(database)
 
     assert reopened.list_results(job_id=job["id"])[0]["platform"] == "土巴兔"
-    assert (
-        reopened.list_results(job_id=job["id"])[0]["platform_type"]
-        == "生活/房产/汽车门户"
-    )
+    assert reopened.list_results(job_id=job["id"])[0]["platform_type"] == "生活/房产/汽车门户"
 
 
 def test_cancel_job_also_cancels_running_task(tmp_path: Path) -> None:

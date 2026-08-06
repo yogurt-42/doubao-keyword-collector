@@ -366,13 +366,8 @@ class ResearchStore:
             updates: list[tuple[str, str, int]] = []
             for row in rows:
                 new_platform = platform_for_reference(row["link"], row["platform"])
-                new_type = category_for_url(row["link"]) or platform_category(
-                    new_platform
-                )
-                if (
-                    new_platform != row["platform"]
-                    or new_type != row["platform_type"]
-                ):
+                new_type = category_for_url(row["link"]) or platform_category(new_platform)
+                if new_platform != row["platform"] or new_type != row["platform_type"]:
                     updates.append((new_platform, new_type, row["id"]))
             if updates:
                 connection.executemany(
@@ -475,9 +470,7 @@ class ResearchStore:
             if task is None:
                 return
             for item in links:
-                platform_type = item.get("platform_type", "") or category_for_url(
-                    item["link"]
-                )
+                platform_type = item.get("platform_type", "") or category_for_url(item["link"])
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO research_results (

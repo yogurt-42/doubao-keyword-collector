@@ -78,7 +78,9 @@ def test_unknown_domain_uses_host_instead_of_noisy_page_label() -> None:
 
 
 def test_extract_research_links_includes_platform_type() -> None:
-    links = extract_research_links("Check https://zhihu.com/question/1 and https://taobao.com/item/1")
+    links = extract_research_links(
+        "Check https://zhihu.com/question/1 and https://taobao.com/item/1"
+    )
     assert len(links) == 2
     by_platform = {row["platform"]: row["platform_type"] for row in links}
     assert by_platform["知乎"] == "博客/技术社区"

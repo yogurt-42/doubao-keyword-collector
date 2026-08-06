@@ -41,8 +41,7 @@ def validate_category(value: str) -> str:
     category = value.strip()
     if category not in PLATFORM_CATEGORIES:
         raise ValueError(
-            f"类型 {category!r} 不在可选列表中。"
-            f"可选：{', '.join(PLATFORM_CATEGORIES)}"
+            f"类型 {category!r} 不在可选列表中。可选：{', '.join(PLATFORM_CATEGORIES)}"
         )
     return category
 
@@ -133,9 +132,7 @@ def _refresh_derived_mappings() -> None:
         (entry["domain"], entry["name"], entry["category"]) for entry in PLATFORM_ENTRIES
     ]
     _NAME_TO_CATEGORY.clear()
-    _NAME_TO_CATEGORY.update(
-        {entry["name"]: entry["category"] for entry in PLATFORM_ENTRIES}
-    )
+    _NAME_TO_CATEGORY.update({entry["name"]: entry["category"] for entry in PLATFORM_ENTRIES})
 
 
 def add_entry(domain: str, name: str, category: str) -> dict[str, Any]:

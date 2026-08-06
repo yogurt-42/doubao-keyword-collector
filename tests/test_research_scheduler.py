@@ -182,9 +182,9 @@ async def test_scheduler_keeps_polling_after_asyncio_timeout() -> None:
 async def test_scheduler_runs_one_keyword_and_respects_second_interval() -> None:
     store = FakeStore()
     # task-2 安排在 30 秒后，模拟真实任务的时间间隔
-    store.tasks[1]["scheduled_at"] = (
-        local_now() + timedelta(seconds=30)
-    ).isoformat(timespec="seconds")
+    store.tasks[1]["scheduled_at"] = (local_now() + timedelta(seconds=30)).isoformat(
+        timespec="seconds"
+    )
     scheduler = ResearchScheduler(store, FakePool())  # type: ignore[arg-type]
 
     await scheduler._dispatch_due_tasks()
@@ -207,9 +207,9 @@ async def test_scheduler_runs_one_keyword_and_respects_second_interval() -> None
 async def test_scheduler_starts_closed_account_automatically() -> None:
     store = FakeStore()
     # 只让 task-1 到期，避免 worker 立即完成后 task-2 也被派发
-    store.tasks[1]["scheduled_at"] = (
-        local_now() + timedelta(seconds=30)
-    ).isoformat(timespec="seconds")
+    store.tasks[1]["scheduled_at"] = (local_now() + timedelta(seconds=30)).isoformat(
+        timespec="seconds"
+    )
     pool = ClosedAccountPool()
     scheduler = ResearchScheduler(store, pool)  # type: ignore[arg-type]
 
@@ -224,9 +224,9 @@ async def test_scheduler_starts_closed_account_automatically() -> None:
 async def test_scheduler_can_overlap_work_on_different_accounts() -> None:
     store = FakeStore()
     # 先只让第一个任务到期，第二个任务随后手动放行
-    store.tasks[1]["scheduled_at"] = (
-        local_now() + timedelta(seconds=30)
-    ).isoformat(timespec="seconds")
+    store.tasks[1]["scheduled_at"] = (local_now() + timedelta(seconds=30)).isoformat(
+        timespec="seconds"
+    )
     pool = MultiAccountPool()
     scheduler = ResearchScheduler(store, pool)  # type: ignore[arg-type]
 
@@ -289,10 +289,7 @@ async def test_scheduler_cancels_running_worker() -> None:
 class ThreeAccountPool:
     def __init__(self) -> None:
         self.release = asyncio.Event()
-        self.started = {
-            account_id: asyncio.Event()
-            for account_id in ["账号1", "账号2", "账号3"]
-        }
+        self.started = {account_id: asyncio.Event() for account_id in ["账号1", "账号2", "账号3"]}
         self.accounts = {
             account_id: type(
                 "Account",

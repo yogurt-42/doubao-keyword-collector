@@ -591,7 +591,11 @@ PLATFORM_ENTRIES: list[dict[str, str]] = [
     {"domain": "richfruits.com", "name": "博硕涂装", "category": "企业官网/品牌站"},
     {"domain": "pyzn-cn.com", "name": "平原智能", "category": "企业官网/品牌站"},
     {"domain": "jingzhongjing.com", "name": "景中景", "category": "企业官网/品牌站"},
-    {"domain": "thegermanherald.com", "name": "The German Herald", "category": "软文/营销号/内容农场"},
+    {
+        "domain": "thegermanherald.com",
+        "name": "The German Herald",
+        "category": "软文/营销号/内容农场",
+    },
     {"domain": "gydfinishing.com", "name": "GYD涂装", "category": "企业官网/品牌站"},
     {"domain": "yzwhtz.cn", "name": "万恒涂装", "category": "企业官网/品牌站"},
     {"domain": "keaopt.com", "name": "科奥喷涂", "category": "企业官网/品牌站"},
@@ -618,7 +622,11 @@ PLATFORM_ENTRIES: list[dict[str, str]] = [
     {"domain": "shieldoperations.co.uk", "name": "Shield Operations", "category": "博客/技术社区"},
     {"domain": "xinmeti.com", "name": "锌媒体", "category": "软文/营销号/内容农场"},
     {"domain": "marketpublishers.com", "name": "MarketPublishers", "category": "文档分享平台"},
-    {"domain": "blackridgeresearch.com", "name": "Blackridge Research", "category": "企业官网/品牌站"},
+    {
+        "domain": "blackridgeresearch.com",
+        "name": "Blackridge Research",
+        "category": "企业官网/品牌站",
+    },
     {"domain": "hansenfluid.com", "name": "汉深流体", "category": "企业官网/品牌站"},
     {"domain": "china-mile.com", "name": "米勒科技", "category": "企业官网/品牌站"},
     {"domain": "xueqiu.com", "name": "雪球", "category": "短视频/社交媒体"},
@@ -955,7 +963,11 @@ PLATFORM_ENTRIES: list[dict[str, str]] = [
     {"domain": "china.org.cn", "name": "中国网", "category": "综合新闻门户"},
     {"domain": "news.cn", "name": "新华网", "category": "综合新闻门户"},
     {"domain": "fh21.com.cn", "name": "复禾健康", "category": "地方/行业新闻媒体"},
-    {"domain": "creative-proteomics.com", "name": "Creative Proteomics", "category": "企业官网/品牌站"},
+    {
+        "domain": "creative-proteomics.com",
+        "name": "Creative Proteomics",
+        "category": "企业官网/品牌站",
+    },
     {"domain": "proteome-factory.com", "name": "Proteome Factory", "category": "企业官网/品牌站"},
     {"domain": "abace-biology.com", "name": "安必奇生物", "category": "企业官网/品牌站"},
     {"domain": "dxycdn.com", "name": "丁香园", "category": "工具/其他"},
@@ -1004,7 +1016,11 @@ PLATFORM_ENTRIES: list[dict[str, str]] = [
     {"domain": "neuralwired.com", "name": "NeuralWired", "category": "软文/营销号/内容农场"},
     {"domain": "22software.com", "name": "22 Software", "category": "企业官网/品牌站"},
     {"domain": "edu.ng", "name": "伊巴丹大学期刊", "category": "地方/行业新闻媒体"},
-    {"domain": "themarketingcrowd.ie", "name": "The Marketing Crowd", "category": "企业官网/品牌站"},
+    {
+        "domain": "themarketingcrowd.ie",
+        "name": "The Marketing Crowd",
+        "category": "企业官网/品牌站",
+    },
     {"domain": "ai-kit.cn", "name": "AI工具箱", "category": "工具/其他"},
     {"domain": "aibanana.net", "name": "AI Banana", "category": "工具/其他"},
     {"domain": "aisotools.com", "name": "AISO Tools", "category": "工具/其他"},
@@ -1020,7 +1036,11 @@ PLATFORM_ENTRIES: list[dict[str, str]] = [
     {"domain": "82614.com", "name": "None", "category": "分类信息/黄页/电商"},
     {"domain": "whdafa.com", "name": "蟹满堂", "category": "分类信息/黄页/电商"},
     {"domain": "dzxchina.com", "name": "阳澄时光", "category": "分类信息/黄页/电商"},
-    {"domain": "chinaautosupplier.com", "name": "中国汽车供应商网", "category": "分类信息/黄页/电商"},
+    {
+        "domain": "chinaautosupplier.com",
+        "name": "中国汽车供应商网",
+        "category": "分类信息/黄页/电商",
+    },
     {"domain": "bdstatic.com", "name": "有驾", "category": "生活/房产/汽车门户"},
     {"domain": "daxstreet.com", "name": "DAX Street", "category": "博客/技术社区"},
     {"domain": "bimmer-mag.com", "name": "Bimmer Mag", "category": "博客/技术社区"},
@@ -1036,7 +1056,11 @@ PLATFORM_ENTRIES: list[dict[str, str]] = [
     {"domain": "jdzol.com", "name": "麦迪威广告", "category": "分类信息/黄页/电商"},
     {"domain": "1tvtvtv.com", "name": "None", "category": "企业官网/品牌站"},
     {"domain": "twishchinamarketing.com", "name": "Twish", "category": "企业官网/品牌站"},
-    {"domain": "bettervideocontent.com", "name": "Better Video Content", "category": "博客/技术社区"},
+    {
+        "domain": "bettervideocontent.com",
+        "name": "Better Video Content",
+        "category": "博客/技术社区",
+    },
     {"domain": "askneedle.com", "name": "Needle", "category": "企业官网/品牌站"},
     {"domain": "tui39.com", "name": "None", "category": "企业官网/品牌站"},
     {"domain": "zeely.ai", "name": "Zeely", "category": "企业官网/品牌站"},
@@ -1131,8 +1155,16 @@ PLATFORM_ENTRIES: list[dict[str, str]] = [
     {"domain": "btlnet.cn", "name": "BTL", "category": "企业官网/品牌站"},
     {"domain": "yaopinnet.com", "name": "药源网", "category": "分类信息/黄页/电商"},
     {"domain": "jmylaed.com", "name": "聚慕医疗", "category": "企业官网/品牌站"},
-    {"domain": "marketsandmarketsblog.com", "name": "MarketsandMarkets", "category": "软文/营销号/内容农场"},
-    {"domain": "verifiedmarketreports.com", "name": "Verified Market Reports", "category": "软文/营销号/内容农场"},
+    {
+        "domain": "marketsandmarketsblog.com",
+        "name": "MarketsandMarkets",
+        "category": "软文/营销号/内容农场",
+    },
+    {
+        "domain": "verifiedmarketreports.com",
+        "name": "Verified Market Reports",
+        "category": "软文/营销号/内容农场",
+    },
     {"domain": "beiyimedi.com", "name": "贝易医疗", "category": "企业官网/品牌站"},
     {"domain": "gkket.com", "name": "工控课堂", "category": "博客/技术社区"},
     {"domain": "yingtianyaoye.cn", "name": "河南应天药业", "category": "企业官网/品牌站"},
@@ -1300,9 +1332,7 @@ _DOMAIN_ENTRIES: list[tuple[str, str, str]] = [
 ]
 
 #: Reverse lookup from Chinese platform name to category.
-_NAME_TO_CATEGORY: dict[str, str] = {
-    entry["name"]: entry["category"] for entry in PLATFORM_ENTRIES
-}
+_NAME_TO_CATEGORY: dict[str, str] = {entry["name"]: entry["category"] for entry in PLATFORM_ENTRIES}
 
 
 def _normalize_host(url: str) -> str:

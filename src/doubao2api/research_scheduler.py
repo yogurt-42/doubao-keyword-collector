@@ -195,8 +195,7 @@ class ResearchScheduler:
                     and startup_age < ACCOUNT_STARTUP_GRACE_SECONDS
                 ):
                     self._selection_wait_reason = (
-                        f"账号 {account_id} 正在后台加载采集页面"
-                        f"（{startup_age:.0f} 秒）"
+                        f"账号 {account_id} 正在后台加载采集页面（{startup_age:.0f} 秒）"
                     )
                     continue
                 self.store.update_task_progress(
@@ -214,9 +213,7 @@ class ResearchScheduler:
                     )
                     continue
                 if state.get("browser") == "loading":
-                    self._selection_wait_reason = (
-                        f"账号 {account_id} 正在后台加载采集页面"
-                    )
+                    self._selection_wait_reason = f"账号 {account_id} 正在后台加载采集页面"
                     continue
                 if not state.get("logged_in"):
                     self.store.pause_account(account_id, 60, "账号尚未登录")
@@ -247,9 +244,7 @@ class ResearchScheduler:
 
     async def _run_task(self, task: dict[str, Any], account_id: str) -> None:
         if self._is_job_cancelled(task["job_id"]):
-            self.store.fail_or_retry_task(
-                task["id"], "任务已取消", retry=False
-            )
+            self.store.fail_or_retry_task(task["id"], "任务已取消", retry=False)
             return
         try:
             account = self.account_pool.get_if_started(account_id)
@@ -287,9 +282,7 @@ class ResearchScheduler:
                 timeout=TASK_TIMEOUT_SECONDS,
             )
             if self._is_job_cancelled(task["job_id"]):
-                self.store.fail_or_retry_task(
-                    task["id"], "任务已取消", retry=False
-                )
+                self.store.fail_or_retry_task(task["id"], "任务已取消", retry=False)
                 return
             self.store.update_task_progress(
                 task["id"],

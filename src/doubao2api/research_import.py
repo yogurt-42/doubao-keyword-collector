@@ -89,8 +89,7 @@ def preview_keyword_file(filename: str, data: bytes, max_rows: int = 20) -> list
             sheet = workbook.active
             rows = list(sheet.iter_rows(values_only=True))
             return [
-                [str(cell) if cell is not None else "" for cell in row]
-                for row in rows[:max_rows]
+                [str(cell) if cell is not None else "" for cell in row] for row in rows[:max_rows]
             ]
         finally:
             workbook.close()

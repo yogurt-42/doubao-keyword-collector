@@ -52,9 +52,7 @@ async def test_default_account_cannot_be_deleted(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_snapshot_failure_backoff(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_snapshot_failure_backoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = SettingsStore(tmp_path)
     pool = BrowserAccountPool(store, RuntimeConfig(open_admin_browser=False))
     pool.ensure_account_environment("account-a")

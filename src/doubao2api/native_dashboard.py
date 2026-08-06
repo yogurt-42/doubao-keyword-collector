@@ -340,8 +340,7 @@ class DateRangePicker(QPushButton):
 
     def _sync_text(self) -> None:
         self.setText(
-            f"{self.start_date.toString('yyyy-MM-dd')}  —  "
-            f"{self.end_date.toString('yyyy-MM-dd')}"
+            f"{self.start_date.toString('yyyy-MM-dd')}  —  {self.end_date.toString('yyyy-MM-dd')}"
         )
 
     def date_from(self) -> str:
@@ -673,9 +672,7 @@ class NativeDashboard(QWidget):
             )
             self.refresh_jobs()
             if failed:
-                self.engine_badge.setToolTip(
-                    "以下账号未能自动恢复：" + "、".join(failed)
-                )
+                self.engine_badge.setToolTip("以下账号未能自动恢复：" + "、".join(failed))
 
         self._watch(
             self.backend.submit(restore()),
@@ -1080,9 +1077,7 @@ class NativeDashboard(QWidget):
         layout.setContentsMargins(4, 8, 4, 4)
         layout.setSpacing(10)
 
-        intro = QLabel(
-            "对比两个采集时段中 AI 引用信源的变化：新增、掉出及持续出现的平台一目了然"
-        )
+        intro = QLabel("对比两个采集时段中 AI 引用信源的变化：新增、掉出及持续出现的平台一目了然")
         intro.setObjectName("workflowBanner")
         layout.addWidget(intro)
 
@@ -1206,9 +1201,7 @@ class NativeDashboard(QWidget):
         layout.addLayout(toolbar)
 
         self.platform_info_table = QTableWidget(0, 3)
-        self.platform_info_table.setHorizontalHeaderLabels(
-            ["URL（域名）", "平台名", "平台类型"]
-        )
+        self.platform_info_table.setHorizontalHeaderLabels(["URL（域名）", "平台名", "平台类型"])
         self._configure_table(self.platform_info_table)
         self.platform_info_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
@@ -1234,10 +1227,7 @@ class NativeDashboard(QWidget):
     ) -> None:
         """Refresh a combo box only when its items actually changed."""
 
-        current = [
-            (combo.itemText(index), combo.itemData(index))
-            for index in range(combo.count())
-        ]
+        current = [(combo.itemText(index), combo.itemData(index)) for index in range(combo.count())]
         if current == [(default_text, "")] + items:
             return
         previous = combo.currentData()
@@ -1272,9 +1262,7 @@ class NativeDashboard(QWidget):
         ):
             widget.setVisible(not entering)
         self.sections.tabBar().setVisible(not entering)
-        self.focus_table_button.setText(
-            "退出沉浸（Esc）" if entering else "沉浸查看表格"
-        )
+        self.focus_table_button.setText("退出沉浸（Esc）" if entering else "沉浸查看表格")
         if entering or self._window_was_fullscreen:
             window.showFullScreen()
         elif self._window_was_maximized:
@@ -1415,9 +1403,7 @@ class NativeDashboard(QWidget):
             clear = QPushButton("验证已完成")
             clear.setObjectName("secondaryButton")
             clear.setMinimumWidth(100)
-            clear.clicked.connect(
-                lambda _, aid=row["account_id"]: self.clear_account_captcha(aid)
-            )
+            clear.clicked.connect(lambda _, aid=row["account_id"]: self.clear_account_captcha(aid))
             layout.addWidget(clear)
         if row["started"]:
             focus = QPushButton("切换标签")
@@ -2139,9 +2125,9 @@ class NativeDashboard(QWidget):
                     export = QPushButton("导出")
                     export.setObjectName("secondaryButton")
                     export.clicked.connect(
-                        lambda _,
-                        jid=row["id"],
-                        name=row["name"]: self.export_job_results(jid, name)
+                        lambda _, jid=row["id"], name=row["name"]: self.export_job_results(
+                            jid, name
+                        )
                     )
                     rename = QPushButton("重命名")
                     rename.setObjectName("secondaryButton")
@@ -2340,9 +2326,7 @@ class NativeDashboard(QWidget):
             self.result_platform_value.setText(str(summary["platforms"]))
             self.platform_distribution_rows = list(dashboard["platforms"])
             self.platform_distribution_total = int(summary["total"])
-            self.source_distribution_chart.set_rows(
-                dashboard["platforms"], int(summary["total"])
-            )
+            self.source_distribution_chart.set_rows(dashboard["platforms"], int(summary["total"]))
             platform_count = len(dashboard["platforms"])
             self.distribution_hint.setText(
                 f"共识别 {platform_count} 个平台；默认展示前 {SourceDistributionChart.TOP_N} 名，"
@@ -2574,12 +2558,8 @@ class NativeDashboard(QWidget):
             self.compare_b_value.setText(str(summary["b_sources"]))
             self.compare_added_value.setText(str(summary["added_platforms"]))
             self.compare_removed_value.setText(str(summary["removed_platforms"]))
-            added_sources = [
-                str(row["platform"]) for row in rows if row["status"] == "added"
-            ]
-            removed_sources = [
-                str(row["platform"]) for row in rows if row["status"] == "removed"
-            ]
+            added_sources = [str(row["platform"]) for row in rows if row["status"] == "added"]
+            removed_sources = [str(row["platform"]) for row in rows if row["status"] == "removed"]
             continued_sources = [
                 str(row["platform"]) for row in rows if row["status"] == "continued"
             ]

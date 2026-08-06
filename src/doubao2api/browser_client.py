@@ -329,9 +329,7 @@ class BrowserClient:
                     )
                 except Exception:
                     while time.monotonic() < deadline:
-                        capture = await self._page.evaluate(
-                            "() => window.__doubaoOssCapture || {}"
-                        )
+                        capture = await self._page.evaluate("() => window.__doubaoOssCapture || {}")
                         if capture.get("done"):
                             break
                         await asyncio.sleep(RESPONSE_POLL_INTERVAL_SECONDS)

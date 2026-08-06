@@ -72,8 +72,7 @@ def parse_cookie_records(cookie_text: str) -> list[dict[str, Any]]:
     # Heuristic: if the text contains cookie attributes, treat each line as a
     # single Set-Cookie value; otherwise treat each semicolon part as a cookie.
     has_attributes = any(
-        attr in text.lower()
-        for attr in ("domain=", "path=", "samesite=", "httponly", "secure")
+        attr in text.lower() for attr in ("domain=", "path=", "samesite=", "httponly", "secure")
     )
 
     if has_attributes:

@@ -139,14 +139,17 @@ REFERENCE_ROWS_SCRIPT_TEMPLATE = r"""
 })()
 """
 
+
 def build_reference_rows_script() -> str:
     return (
-        REFERENCE_ROWS_SCRIPT_TEMPLATE
-        .replace("__REFERENCE_ROWS__", js_string(", ".join(SELECTORS["reference_rows"])))
+        REFERENCE_ROWS_SCRIPT_TEMPLATE.replace(
+            "__REFERENCE_ROWS__", js_string(", ".join(SELECTORS["reference_rows"]))
+        )
         .replace("__REFERENCE_TITLE__", js_string(SELECTORS["reference_title"]))
         .replace("__REFERENCE_SOURCE__", js_string(SELECTORS["reference_source"]))
         .replace("__PLATFORM_DATA__", to_js_platform_data())
     )
+
 
 REFERENCE_GENERIC_SCRIPT_TEMPLATE = r"""
 (() => {
@@ -199,9 +202,8 @@ REFERENCE_GENERIC_SCRIPT_TEMPLATE = r"""
 })()
 """
 
-REFERENCE_GENERIC_SCRIPT = (
-    REFERENCE_GENERIC_SCRIPT_TEMPLATE
-    .replace("__REFERENCE_SUMMARY_PATTERN__", js_regex_pattern(REFERENCE_SUMMARY_PATTERN))
+REFERENCE_GENERIC_SCRIPT = REFERENCE_GENERIC_SCRIPT_TEMPLATE.replace(
+    "__REFERENCE_SUMMARY_PATTERN__", js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
 )
 
 LOGIN_STATE_SCRIPT_TEMPLATE = r"""
@@ -255,8 +257,9 @@ LOGIN_STATE_SCRIPT_TEMPLATE = r"""
 """
 
 LOGIN_STATE_SCRIPT = (
-    LOGIN_STATE_SCRIPT_TEMPLATE
-    .replace("__LOGIN_ROLES__", js_selector_list(SELECTORS["new_chat"]["roles"]))
+    LOGIN_STATE_SCRIPT_TEMPLATE.replace(
+        "__LOGIN_ROLES__", js_selector_list(SELECTORS["new_chat"]["roles"])
+    )
     .replace(
         "__LOGIN_TEXT_PATTERNS__",
         js_selector_list(SELECTORS["login_controls"]["text_patterns"]),
@@ -401,9 +404,7 @@ class EmbeddedBrowserClient:
                 self._script_timeout_streak += 1
                 if self._script_timeout_streak >= MAX_SCRIPT_TIMEOUT_STREAK:
                     self._mark_needs_captcha("页面连续无响应")
-                    raise RuntimeError(
-                        "页面连续无响应，疑似需要验证码，请人工处理"
-                    ) from exc
+                    raise RuntimeError("页面连续无响应，疑似需要验证码，请人工处理") from exc
             raise
         self._script_timeout_streak = 0
         return result
@@ -428,9 +429,9 @@ class EmbeddedBrowserClient:
         """Capture a lightweight snapshot of the current page for debugging."""
 
         reference_selector = js_string(", ".join(SELECTORS["reference_rows"]))
-        expand_selector = js_string(", ".join(
-            s for s in SELECTORS["reference_expand"] if not s.startswith("xpath=")
-        ))
+        expand_selector = js_string(
+            ", ".join(s for s in SELECTORS["reference_expand"] if not s.startswith("xpath="))
+        )
         more_text = js_string(SELECTORS["reference_more_text"])
         send_selector = js_string(", ".join(SELECTORS["send_button"]))
         composer_selector = js_string(", ".join(SELECTORS["composer"]))
@@ -483,8 +484,7 @@ class EmbeddedBrowserClient:
               };
               return snapshot;
             })()
-            """
-            .replace("__SUMMARY_PATTERN__", summary_pattern)
+            """.replace("__SUMMARY_PATTERN__", summary_pattern)
             .replace("__REFERENCE_SELECTOR__", reference_selector)
             .replace("__EXPAND_SELECTOR__", expand_selector)
             .replace("__MORE_TEXT__", more_text)
@@ -498,11 +498,7 @@ class EmbeddedBrowserClient:
 
     async def inspect_session_state(self) -> dict[str, Any]:
         async with self._state_lock:
-            state = (
-                await self.bridge.state(self.account_id)
-                if self._started
-                else {"page_url": ""}
-            )
+            state = await self.bridge.state(self.account_id) if self._started else {"page_url": ""}
             if self._started and not state.get("load_finished", True):
                 return {
                     "account_id": self.account_id,
@@ -619,8 +615,7 @@ class EmbeddedBrowserClient:
                 # dashboard away from the user.
                 await self._activate_for_automation()
                 if fresh_conversation:
-                    new_conversation_script = (
-                        r"""
+                    new_conversation_script = r"""
                         (() => {
                           const visible = node => {
                             const style = getComputedStyle(node);
@@ -640,21 +635,17 @@ class EmbeddedBrowserClient:
                           target.click();
                           return true;
                         })()
-                        """
-                        .replace(
-                            "__NEW_CHAT_ROLES__",
-                            js_selector_list(SELECTORS["new_chat"]["roles"]),
-                        )
-                        .replace(
-                            "__NEW_CHAT_TEXT__",
-                            js_string(SELECTORS["new_chat"]["text"]),
-                        )
+                        """.replace(
+                        "__NEW_CHAT_ROLES__",
+                        js_selector_list(SELECTORS["new_chat"]["roles"]),
+                    ).replace(
+                        "__NEW_CHAT_TEXT__",
+                        js_string(SELECTORS["new_chat"]["text"]),
                     )
                     clicked = await self._run_script(new_conversation_script)
                     if not clicked:
                         raise RuntimeError("没有找到豆包页面左侧的“新对话”按钮")
-                    textarea_ready_script = (
-                        r"""
+                    textarea_ready_script = r"""
                         (() => {
                           const selectors = __COMPOSER_SELECTORS__;
                           const textarea = selectors.flatMap(selector =>
@@ -665,8 +656,8 @@ class EmbeddedBrowserClient:
                           });
                           return Boolean(textarea);
                         })()
-                        """
-                        .replace("__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"]))
+                        """.replace(
+                        "__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"])
                     )
                     ready = await self._wait_for_condition(
                         textarea_ready_script,
@@ -706,8 +697,7 @@ class EmbeddedBrowserClient:
                 """
                 await self._run_script(send_script)
                 send_button_selectors = js_selector_list(SELECTORS["send_button"])
-                send_ready_script = (
-                    r"""
+                send_ready_script = r"""
                     (() => {
                       const selectors = __SEND_BUTTON_SELECTORS__;
                       const button = selectors
@@ -716,9 +706,7 @@ class EmbeddedBrowserClient:
                           && node.getAttribute('aria-disabled') !== 'true');
                       return Boolean(button);
                     })()
-                    """
-                    .replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
-                )
+                    """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
                 send_ready = await self._wait_for_condition(
                     send_ready_script,
                     timeout=SEND_BUTTON_READY_TIMEOUT_SECONDS,
@@ -726,8 +714,7 @@ class EmbeddedBrowserClient:
                 )
                 if not send_ready:
                     raise RuntimeError("豆包发送按钮尚未就绪，关键词没有发送")
-                click_send_script = (
-                    r"""
+                click_send_script = r"""
                     (() => {
                       const selectors = __SEND_BUTTON_SELECTORS__;
                       const button = selectors
@@ -737,9 +724,7 @@ class EmbeddedBrowserClient:
                       button.click();
                       return true;
                     })()
-                    """
-                    .replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
-                )
+                    """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
                 sent = await self._run_script(click_send_script)
                 if not sent:
                     raise RuntimeError("豆包发送按钮点击失败，关键词没有发送")
@@ -791,8 +776,7 @@ class EmbeddedBrowserClient:
                                     referenceReady: new RegExp(referencePattern).test(body)
                                   };
                                 })()
-                                """
-                                .replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
+                                """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
                                 .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
                                 .replace("__CAPTCHA_PATTERN__", captcha_pattern)
                             ),
@@ -803,9 +787,7 @@ class EmbeddedBrowserClient:
                         page_state = {}
                     if page_state.get("captcha"):
                         self._needs_captcha = True
-                        raise RuntimeError(
-                            "检测到豆包验证码，请在账号标签页完成验证后重试"
-                        )
+                        raise RuntimeError("检测到豆包验证码，请在账号标签页完成验证后重试")
                     loading = bool(page_state.get("loading"))
                     saw_loading = saw_loading or loading
                     if page_state.get("referenceReady"):
@@ -834,21 +816,17 @@ class EmbeddedBrowserClient:
                 expected = 0
                 if collect_thinking_references:
                     reference_summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
-                    reference_rows_selector = js_string(
-                        ", ".join(SELECTORS["reference_rows"])
-                    )
-                    reference_appear_script = (
-                        r"""
+                    reference_rows_selector = js_string(", ".join(SELECTORS["reference_rows"]))
+                    reference_appear_script = r"""
                         (() => {
                           const pattern = __REFERENCE_SUMMARY_PATTERN__;
                           if (new RegExp(pattern).test(document.body.innerText || '')) return true;
                           const selector = __REFERENCE_ROWS_SELECTOR__;
                           return document.querySelectorAll(selector).length > 0;
                         })()
-                        """
-                        .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
-                        .replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
-                    )
+                        """.replace(
+                        "__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern
+                    ).replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
                     await self._wait_for_condition(
                         reference_appear_script,
                         timeout=REFERENCE_APPEAR_TIMEOUT_SECONDS,
@@ -913,12 +891,8 @@ class EmbeddedBrowserClient:
         reference_callback: Callable[[dict[str, str]], Any] | None = None,
     ) -> tuple[list[dict[str, str]], int]:
         reference_summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
-        reference_rows_selector = js_string(
-            ", ".join(SELECTORS["reference_rows"])
-        )
-        reference_expand_selectors = js_selector_list(
-            SELECTORS["reference_expand"]
-        )
+        reference_rows_selector = js_string(", ".join(SELECTORS["reference_rows"]))
+        reference_expand_selectors = js_selector_list(SELECTORS["reference_expand"])
         more_references_text = js_string(SELECTORS["reference_more_text"])
         expected_script = (
             r"""
@@ -968,8 +942,7 @@ class EmbeddedBrowserClient:
               }
               return expected;
             })()
-            """
-            .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
+            """.replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
             .replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
             .replace("__REFERENCE_EXPAND_SELECTORS__", reference_expand_selectors)
         )
@@ -983,9 +956,9 @@ class EmbeddedBrowserClient:
                   const pattern = __REFERENCE_SUMMARY_PATTERN__;
                   return new RegExp(pattern).test(document.body.innerText || '');
                 })()
-                """
-                .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
-                .replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
+                """.replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern).replace(
+                    "__REFERENCE_ROWS_SELECTOR__", reference_rows_selector
+                )
             ),
             timeout=REFERENCE_APPEAR_TIMEOUT_SECONDS,
             interval=0.1,
@@ -1034,8 +1007,7 @@ class EmbeddedBrowserClient:
                       window.scrollTo(0, document.body.scrollHeight);
                       return false;
                     })()
-                    """
-                    .replace("__MORE_REFERENCES_TEXT__", more_references_text)
+                    """.replace("__MORE_REFERENCES_TEXT__", more_references_text)
                 ),
             )
             await asyncio.sleep(REFERENCE_POLL_INTERVAL_SECONDS)

@@ -46,7 +46,7 @@ SELECTORS = {
     "reference_source": '[class*="platform"],[class*="source"],[class*="site"]',
     # Buttons/areas that expand the thinking box / reference summary.
     "reference_expand": [
-        f'xpath={THINKING_EXPAND_XPATH}',
+        f"xpath={THINKING_EXPAND_XPATH}",
         '[data-testid="collapse_button"]',
         '[class*="collapse-collapse-button"]',
     ],
