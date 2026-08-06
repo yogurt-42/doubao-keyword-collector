@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible problem without including account secrets
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请勿提交 Cookie、Token、二维码、账号目录、完整请求头或包含个人信息的截图。
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      placeholder: 例如 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: 操作系统
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux
+        - macOS
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 请写出最短、可重复的操作步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+

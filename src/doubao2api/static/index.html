@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>豆包关键词资料采集器</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #152033;
+      --muted: #6b788d;
+      --line: #dfe6ef;
+      --blue: #3157d5;
+      --blue-soft: #eef2ff;
+      --green: #147d64;
+      --amber: #a86600;
+      --red: #c43b4d;
+      --panel: rgba(255,255,255,.94);
+      --shadow: 0 18px 55px rgba(29, 47, 80, .09);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; color: var(--ink);
+      font: 14px/1.55 Inter, ui-sans-serif, system-ui, "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at 5% 0, #e9efff, transparent 30rem),
+        radial-gradient(circle at 100% 4%, #e4f8f2, transparent 28rem),
+        #f5f7fb;
+    }
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+    .shell { width: min(1240px, calc(100% - 30px)); margin: auto; padding: 24px 0 50px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .brand { display: flex; align-items: center; gap: 13px; }
+    .logo {
+      width: 44px; height: 44px; display: grid; place-items: center; color: white;
+      border-radius: 14px; font-size: 20px; font-weight: 800;
+      background: linear-gradient(145deg, #3157d5, #6d8df4);
+      box-shadow: 0 12px 32px rgba(49,87,213,.25);
+    }
+    h1 { margin: 0; font-size: 20px; }
+    .sub { color: var(--muted); font-size: 12px; }
+    .tag {
+      padding: 7px 11px; border-radius: 999px; color: var(--green);
+      border: 1px solid #b9dfd3; background: #effbf7; font-size: 12px;
+    }
+    nav { display: flex; gap: 6px; margin: 24px 0 16px; padding: 5px; width: fit-content;
+      border-radius: 13px; background: #e8edf5; }
+    .tab {
+      border: 0; background: transparent; color: #5f6e83; padding: 9px 18px;
+      border-radius: 9px; font-weight: 650;
+    }
+    .tab.active { background: white; color: var(--blue); box-shadow: 0 4px 15px rgba(30,50,80,.08); }
+    .page { display: none; }
+    .page.active { display: block; }
+    .grid { display: grid; grid-template-columns: minmax(0,1.35fr) minmax(310px,.65fr); gap: 16px; }
+    .panel {
+      padding: 22px; border: 1px solid var(--line); border-radius: 18px;
+      background: var(--panel); box-shadow: var(--shadow);
+    }
+    .panel + .panel { margin-top: 16px; }
+    .panel h2 { margin: 0 0 4px; font-size: 17px; }
+    .hint { margin: 0 0 18px; color: var(--muted); font-size: 12px; }
+    label { display: block; margin: 13px 0 6px; font-weight: 650; font-size: 12px; }
+    input, textarea, select {
+      width: 100%; border: 1px solid var(--line); border-radius: 10px; color: var(--ink);
+      background: white; padding: 10px 11px; outline: none;
+    }
+    input:focus, textarea:focus, select:focus { border-color: #8ba2eb; box-shadow: 0 0 0 3px #edf1ff; }
+    textarea { resize: vertical; min-height: 120px; }
+    .row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+    .row.three { grid-template-columns: repeat(3,minmax(0,1fr)); }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .btn {
+      border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px;
+      background: white; color: var(--ink); font-weight: 650;
+    }
+    .btn:hover { border-color: #a8b5ca; }
+    .btn.primary { color: white; background: var(--blue); border-color: var(--blue); }
+    .btn.danger { color: var(--red); border-color: #f0c5cc; }
+    .btn.small { padding: 5px 9px; font-size: 12px; }
+    .filebox {
+      display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px dashed #bcc8da;
+      border-radius: 11px; background: #fafbfe; color: var(--muted);
+    }
+    .filebox input { border: 0; padding: 0; background: transparent; }
+    .checks { display: flex; flex-wrap: wrap; gap: 8px; }
+    .check {
+      display: flex; align-items: center; gap: 7px; padding: 7px 10px; margin: 0;
+      border-radius: 9px; border: 1px solid var(--line); background: white; font-weight: 500;
+    }
+    .check input { width: auto; margin: 0; }
+    .notice {
+      padding: 12px 13px; border-left: 3px solid #df9e2c; border-radius: 8px;
+      background: #fff9ec; color: #765215; font-size: 12px;
+    }
+    .stats { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-bottom: 16px; }
+    .stat { padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: white; }
+    .stat strong { display: block; font-size: 25px; }
+    .stat span { color: var(--muted); font-size: 12px; }
+    .list { display: grid; gap: 10px; }
+    .card { padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: white; }
+    .cardhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+    .title { font-weight: 750; }
+    .meta { color: var(--muted); font-size: 12px; }
+    .badge { padding: 3px 8px; border-radius: 999px; background: #eef1f6; color: #59677a; font-size: 11px; white-space: nowrap; }
+    .badge.running, .badge.completed { color: var(--green); background: #eaf8f3; }
+    .badge.paused { color: var(--amber); background: #fff4df; }
+    .badge.failed, .badge.cancelled { color: var(--red); background: #fff0f2; }
+    .progress { height: 7px; margin: 11px 0 4px; overflow: hidden; border-radius: 99px; background: #edf1f6; }
+    .progress i { display: block; height: 100%; background: linear-gradient(90deg,#3157d5,#69a8ed); }
+    .empty { padding: 28px; color: var(--muted); text-align: center; border: 1px dashed var(--line); border-radius: 12px; }
+    .toolbar { display: grid; grid-template-columns: 1fr 180px auto; gap: 9px; align-items: end; }
+    .toolbar label { margin-top: 0; }
+    .tablewrap { overflow: auto; margin-top: 14px; border: 1px solid var(--line); border-radius: 12px; background: white; }
+    table { width: 100%; border-collapse: collapse; min-width: 780px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid #edf0f4; text-align: left; vertical-align: top; }
+    th { color: #59677a; font-size: 12px; background: #f8f9fc; white-space: nowrap; }
+    td a { color: var(--blue); text-decoration: none; word-break: break-all; }
+    .toast {
+      position: fixed; right: 20px; bottom: 20px; z-index: 20; max-width: 420px;
+      padding: 12px 15px; border-radius: 11px; color: white; background: #243249;
+      box-shadow: 0 15px 45px rgba(0,0,0,.22); display: none;
+    }
+    details { margin-top: 12px; }
+    summary { cursor: pointer; color: var(--blue); font-size: 12px; }
+    @media (max-width: 820px) {
+      .grid, .row, .row.three, .toolbar { grid-template-columns: 1fr; }
+      header { align-items: flex-start; }
+      .tag { display: none; }
+      nav { width: 100%; }
+      .tab { flex: 1; padding-inline: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand">
+        <div class="logo">豆</div>
+        <div><h1>豆包关键词资料采集器</h1><div class="sub">批量提问 · 思考过程引用提取 · 多账号独立环境</div></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="tag">本地运行 · 数据保存在本机</div>
+        <button class="btn danger small" id="exitApp">退出软件</button>
+      </div>
+    </header>
+
+    <nav>
+      <button class="tab active" data-page="collect">新建采集</button>
+      <button class="tab" data-page="accounts">账号环境</button>
+      <button class="tab" data-page="results">采集结果</button>
+    </nav>
+
+    <main id="collect" class="page active">
+      <div class="grid">
+        <section>
+          <div class="panel">
+            <h2>创建关键词任务</h2>
+            <p class="hint">每行一个关键词，也可以导入 Excel/CSV。系统只保存豆包思考过程中的参考资料链接和平台。</p>
+            <div class="row">
+              <div><label for="jobName">任务名称（可选）</label><input id="jobName" placeholder="例如：7 月品牌词调研"></div>
+              <div><label for="scheduleAt">开始时间（留空立即开始）</label><input id="scheduleAt" type="datetime-local"></div>
+            </div>
+            <label for="keywords">关键词</label>
+            <textarea id="keywords" placeholder="一行一个，例如：&#10;新能源汽车销量&#10;家庭储能市场&#10;AI 搜索产品"></textarea>
+            <label>导入关键词文件</label>
+            <div class="filebox"><input id="keywordFile" type="file" accept=".xlsx,.csv,.tsv"><span id="fileState">支持 .xlsx、.csv、.tsv</span></div>
+            <label>使用账号</label>
+            <div id="accountChecks" class="checks"><span class="meta">正在读取账号…</span></div>
+            <p class="hint">未勾选时自动轮询所有已登录账号。每个账号使用软件内的独立浏览器标签页和独立数据目录。</p>
+            <div class="row three">
+              <div><label for="intervalSeconds">每次采集间隔（秒）</label><input id="intervalSeconds" type="number" min="1" max="86400" value="10"></div>
+              <div><label for="maxAttempts">失败尝试次数</label><select id="maxAttempts"><option>1</option><option selected>2</option><option>3</option></select></div>
+            </div>
+            <details>
+              <summary>修改提问模板</summary>
+              <textarea id="promptTemplate">{keyword}</textarea>
+              <p class="hint">必须保留 {keyword}。结果不会保存回答正文，只提取思考过程内的参考链接。</p>
+            </details>
+            <div class="actions"><button class="btn primary" id="createJob">开始采集</button></div>
+          </div>
+        </section>
+        <aside>
+          <div class="stats">
+            <div class="stat"><strong id="activeJobs">0</strong><span>进行中任务</span></div>
+            <div class="stat"><strong id="resultTotal">0</strong><span>已采集链接</span></div>
+            <div class="stat"><strong id="readyAccounts">0</strong><span>可用账号</span></div>
+            <div class="stat"><strong id="busyAccounts">0</strong><span>正在提问</span></div>
+          </div>
+          <div class="notice">若出现验证码、访问频繁或风控提示，该账号会暂停 30 分钟并等待人工处理，不会自动绕过验证。</div>
+        </aside>
+      </div>
+      <div class="panel">
+        <h2>任务进度</h2><p class="hint">页面会自动刷新。任务暂停后，已经在执行的单条提问会先完成。</p>
+        <div id="jobList" class="list"><div class="empty">还没有采集任务</div></div>
+      </div>
+    </main>
+
+    <main id="accounts" class="page">
+      <div class="panel">
+        <h2>软件内账号浏览器</h2>
+        <p class="hint">创建账号后会在软件顶部打开独立标签页，请直接在标签页中登录豆包。账号之间的 Cookie、缓存和登录状态互不共享。</p>
+        <div class="row">
+          <div><label for="newAccount">新账号名称</label><input id="newAccount" placeholder="例如：账号01"></div>
+          <div class="actions" style="align-items:end"><button class="btn primary" id="addAccount">创建并打开</button><button class="btn" id="refreshAccounts">刷新状态</button></div>
+        </div>
+      </div>
+      <div class="panel"><div id="accountList" class="list"><div class="empty">正在读取账号…</div></div></div>
+    </main>
+
+    <main id="results" class="page">
+      <div class="panel">
+        <h2>思考过程资料链接</h2>
+        <p class="hint">这里只展示豆包“搜索关键词 / 参考资料”展开区中的链接，不包含 AI 最终回答正文里的链接。</p>
+        <div class="toolbar">
+          <div><label for="filterKeyword">关键词筛选</label><input id="filterKeyword" placeholder="输入部分关键词"></div>
+          <div><label for="filterPlatform">平台筛选</label><select id="filterPlatform"><option value="">全部平台</option></select></div>
+          <div class="actions"><button class="btn" id="searchResults">查询</button><button class="btn primary" id="exportResults">导出 Excel</button></div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>日期</th><th>提问关键词</th><th>检索资料链接</th><th>检索资料平台</th></tr></thead>
+            <tbody id="resultRows"><tr><td colspan="4" class="empty">暂无结果</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script>
+    const $ = id => document.getElementById(id);
+    let accountData = [];
+    let jobData = [];
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    })[char]);
+    const api = async (url, options = {}) => {
+      const response = await fetch(url, options);
+      const type = response.headers.get('content-type') || '';
+      const data = type.includes('json') ? await response.json() : await response.text();
+      if (!response.ok) throw new Error(data?.detail || data?.error?.message || data || `请求失败 ${response.status}`);
+      return data;
+    };
+    const toast = (message, error = false) => {
+      const node = $('toast'); node.textContent = message;
+      node.style.background = error ? '#a82f42' : '#243249'; node.style.display = 'block';
+      clearTimeout(window.toastTimer); window.toastTimer = setTimeout(() => node.style.display = 'none', 3500);
+    };
+    const postJSON = (url, body = {}) => api(url, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    const statusText = status => ({
+      running:'进行中', paused:'已暂停', completed:'已完成', failed:'失败',
+      cancelled:'已取消', pending:'等待中'
+    })[status] || status;
+
+    document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(item => item.classList.toggle('active', item === tab));
+      document.querySelectorAll('.page').forEach(page => page.classList.toggle('active', page.id === tab.dataset.page));
+      if (tab.dataset.page === 'results') loadResults();
+      if (tab.dataset.page === 'accounts') loadAccounts();
+    }));
+
+    async function loadAccounts() {
+      try {
+        const data = await api('/admin/api/accounts');
+        accountData = data.accounts;
+        $('readyAccounts').textContent = accountData.filter(item => item.chat_ready).length;
+        $('accountChecks').innerHTML = accountData.map(item => `
+          <label class="check"><input type="checkbox" value="${escapeHtml(item.account_id)}">
+            ${escapeHtml(item.account_id)}
+            <span class="badge ${item.chat_ready ? 'running' : ''}">${item.chat_ready ? '可用' : item.logged_in ? '未就绪' : '未登录'}</span>
+          </label>`).join('') || '<span class="meta">暂无账号</span>';
+        $('accountList').innerHTML = accountData.map(item => `
+          <div class="card">
+            <div class="cardhead">
+              <div><div class="title">${escapeHtml(item.account_id)}</div>
+                <div class="meta">${item.started ? '内置标签页已打开' : '内置标签页未打开'} · ${item.logged_in ? '已登录' : '未登录'} · 独立环境</div>
+              </div>
+              <span class="badge ${item.chat_ready ? 'running' : item.needs_captcha ? 'failed' : ''}">${item.needs_captcha ? '需处理验证' : item.chat_ready ? '可采集' : '未就绪'}</span>
+            </div>
+            <div class="actions">
+              ${item.started ? `<button class="btn small" onclick="accountAction('${encodeURIComponent(item.account_id)}','popup')">切换到标签页</button>
+                <button class="btn small" onclick="accountAction('${encodeURIComponent(item.account_id)}','stop')">关闭标签页</button>`
+                : `<button class="btn small primary" onclick="startAccount('${encodeURIComponent(item.account_id)}')">在软件内打开</button>`}
+            </div>
+          </div>`).join('') || '<div class="empty">暂无账号</div>';
+      } catch (error) { toast(error.message, true); }
+    }
+
+    window.startAccount = async encoded => {
+      try {
+        await postJSON('/admin/api/accounts', {account_id: decodeURIComponent(encoded), start_browser: true});
+        toast('账号标签页已打开，请直接在软件内登录豆包'); await loadAccounts();
+      } catch (error) { toast(error.message, true); }
+    };
+    window.accountAction = async (encoded, action) => {
+      try {
+        await postJSON(`/admin/api/accounts/${encoded}/${action}`, {});
+        await loadAccounts();
+      } catch (error) { toast(error.message, true); }
+    };
+    $('addAccount').addEventListener('click', async () => {
+      const account_id = $('newAccount').value.trim();
+      if (!account_id) return toast('请填写账号名称', true);
+      try {
+        await postJSON('/admin/api/accounts', {account_id, start_browser: true});
+        $('newAccount').value = ''; toast('账号已创建，请在软件内标签页登录'); await loadAccounts();
+      } catch (error) { toast(error.message, true); }
+    });
+    $('refreshAccounts').addEventListener('click', loadAccounts);
+
+    $('keywordFile').addEventListener('change', async event => {
+      const file = event.target.files[0]; if (!file) return;
+      const form = new FormData(); form.append('file', file);
+      $('fileState').textContent = '正在读取…';
+      try {
+        const data = await api('/admin/api/research/import', {method:'POST', body:form});
+        const existing = $('keywords').value.trim();
+        $('keywords').value = [existing, ...data.keywords].filter(Boolean).join('\n');
+        $('fileState').textContent = `已导入 ${data.count} 个关键词`;
+        toast(`成功导入 ${data.count} 个关键词`);
+      } catch (error) { $('fileState').textContent = '导入失败'; toast(error.message, true); }
+    });
+
+    $('createJob').addEventListener('click', async () => {
+      const keywords = $('keywords').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+      if (!keywords.length) return toast('请填写或导入关键词', true);
+      const account_ids = [...$('accountChecks').querySelectorAll('input:checked')].map(item => item.value);
+      const scheduled = $('scheduleAt').value;
+      const body = {
+        name: $('jobName').value.trim(), keywords, account_ids,
+        scheduled_at: scheduled ? new Date(scheduled).toISOString() : null,
+        interval_seconds: Math.round(Number($('intervalSeconds').value)),
+        account_cooldown_seconds: 0,
+        max_attempts: Number($('maxAttempts').value),
+        prompt_template: $('promptTemplate').value
+      };
+      try {
+        await postJSON('/admin/api/research/jobs', body);
+        $('keywords').value = ''; $('jobName').value = ''; $('keywordFile').value = '';
+        $('fileState').textContent = '支持 .xlsx、.csv、.tsv';
+        toast('采集任务已创建'); await loadJobs();
+      } catch (error) { toast(error.message, true); }
+    });
+
+    async function loadJobs() {
+      try {
+        const [jobs, results] = await Promise.all([
+          api('/admin/api/research/jobs'), api('/admin/api/research/results?limit=1')
+        ]);
+        jobData = jobs.jobs;
+        $('activeJobs').textContent = jobData.filter(item => item.status === 'running').length;
+        $('busyAccounts').textContent = jobs.scheduler.active_workers;
+        $('resultTotal').textContent = results.total;
+        $('jobList').innerHTML = jobData.map(job => `
+          <div class="card">
+            <div class="cardhead">
+              <div><div class="title">${escapeHtml(job.name)}</div>
+                <div class="meta">${job.total} 个关键词 · 已完成 ${job.completed} · 失败 ${job.failed} · 进行中 ${job.running_tasks} · 待处理 ${job.pending} · ${escapeHtml(new Date(job.created_at).toLocaleString())}</div>
+              </div><span class="badge ${job.status}">${statusText(job.status)}</span>
+            </div>
+            <div class="progress"><i style="width:${job.progress_percent}%"></i></div>
+            <div class="meta">${job.progress_percent}% · 每次采集间隔 ${job.interval_seconds} 秒</div>
+            ${job.last_error ? `<div class="meta" style="color:var(--red);margin-top:6px">${escapeHtml(job.last_error)}</div>` : ''}
+            <div class="actions">
+              ${job.status === 'running' ? `<button class="btn small" onclick="jobAction('${job.id}','pause')">暂停</button>` : ''}
+              ${job.status === 'paused' ? `<button class="btn small primary" onclick="jobAction('${job.id}','resume')">继续</button>` : ''}
+              ${['running','paused'].includes(job.status) ? `<button class="btn small danger" onclick="jobAction('${job.id}','cancel')">取消</button>` : ''}
+            </div>
+          </div>`).join('') || '<div class="empty">还没有采集任务</div>';
+      } catch (error) { toast(error.message, true); }
+    }
+    window.jobAction = async (id, action) => {
+      try { await postJSON(`/admin/api/research/jobs/${id}/${action}`); await loadJobs(); }
+      catch (error) { toast(error.message, true); }
+    };
+
+    async function loadResults() {
+      const query = new URLSearchParams();
+      if ($('filterKeyword').value.trim()) query.set('keyword', $('filterKeyword').value.trim());
+      if ($('filterPlatform').value) query.set('platform', $('filterPlatform').value);
+      query.set('limit','1000');
+      try {
+        const data = await api('/admin/api/research/results?' + query);
+        $('resultTotal').textContent = data.total;
+        const previous = $('filterPlatform').value;
+        $('filterPlatform').innerHTML = '<option value="">全部平台</option>' + data.platforms.map(value =>
+          `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+        $('filterPlatform').value = previous;
+        $('resultRows').innerHTML = data.items.map(item => `<tr>
+          <td>${escapeHtml(item.collected_date)}</td>
+          <td>${escapeHtml(item.keyword)}</td>
+          <td><a href="${escapeHtml(item.link)}" target="_blank" rel="noreferrer">${escapeHtml(item.link)}</a></td>
+          <td>${escapeHtml(item.platform)}</td>
+        </tr>`).join('') || '<tr><td colspan="4" class="empty">暂无结果</td></tr>';
+      } catch (error) { toast(error.message, true); }
+    }
+    $('searchResults').addEventListener('click', loadResults);
+    $('exportResults').addEventListener('click', () => {
+      const query = new URLSearchParams();
+      if ($('filterKeyword').value.trim()) query.set('keyword', $('filterKeyword').value.trim());
+      if ($('filterPlatform').value) query.set('platform', $('filterPlatform').value);
+      window.location.href = '/admin/api/research/results/export.xlsx?' + query;
+    });
+    $('exitApp').addEventListener('click', async () => {
+      if (!confirm('确定退出软件？正在执行的单条提问会恢复到等待队列。')) return;
+      try {
+        await postJSON('/admin/api/shutdown');
+        document.body.innerHTML = '<div style="padding:80px;text-align:center;font:16px system-ui;color:#334"><h2>软件已退出</h2><p>现在可以关闭此页面。</p></div>';
+      } catch (error) { toast(error.message, true); }
+    });
+
+    Promise.all([loadAccounts(), loadJobs(), loadResults()]);
+    setInterval(() => { loadJobs(); loadAccounts(); }, 5000);
+  </script>
+</body>
+</html>
