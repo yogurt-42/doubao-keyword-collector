@@ -165,7 +165,8 @@ class ResearchStore:
                     updates,
                 )
         connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_research_results_type ON research_results(platform_type)"
+            "CREATE INDEX IF NOT EXISTS idx_research_results_type "
+            "ON research_results(platform_type)"
         )
 
     def create_job(

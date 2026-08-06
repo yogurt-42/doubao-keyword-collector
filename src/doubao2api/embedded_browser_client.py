@@ -5,6 +5,7 @@ import inspect
 import json
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -640,8 +641,14 @@ class EmbeddedBrowserClient:
                           return true;
                         })()
                         """
-                        .replace("__NEW_CHAT_ROLES__", js_selector_list(SELECTORS["new_chat"]["roles"]))
-                        .replace("__NEW_CHAT_TEXT__", js_string(SELECTORS["new_chat"]["text"]))
+                        .replace(
+                            "__NEW_CHAT_ROLES__",
+                            js_selector_list(SELECTORS["new_chat"]["roles"]),
+                        )
+                        .replace(
+                            "__NEW_CHAT_TEXT__",
+                            js_string(SELECTORS["new_chat"]["text"]),
+                        )
                     )
                     clicked = await self._run_script(new_conversation_script)
                     if not clicked:
@@ -745,6 +752,9 @@ class EmbeddedBrowserClient:
                 response_completed = False
                 saw_loading = False
                 answer_finished_at: float | None = None
+                send_button_selectors = js_selector_list(SELECTORS["send_button"])
+                reference_summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
+                captcha_pattern = js_regex_alternation(SELECTORS["captcha_patterns"])
                 while time.monotonic() < deadline:
                     capture = (
                         await self._run_script_or_track_timeout(
@@ -782,9 +792,9 @@ class EmbeddedBrowserClient:
                                   };
                                 })()
                                 """
-                                .replace("__SEND_BUTTON_SELECTORS__", js_selector_list(SELECTORS["send_button"]))
-                                .replace("__REFERENCE_SUMMARY_PATTERN__", js_regex_pattern(REFERENCE_SUMMARY_PATTERN))
-                                .replace("__CAPTCHA_PATTERN__", js_regex_alternation(SELECTORS["captcha_patterns"]))
+                                .replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
+                                .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
+                                .replace("__CAPTCHA_PATTERN__", captcha_pattern)
                             ),
                         )
                         or {}
@@ -823,6 +833,10 @@ class EmbeddedBrowserClient:
                 references: list[dict[str, str]] = []
                 expected = 0
                 if collect_thinking_references:
+                    reference_summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
+                    reference_rows_selector = js_string(
+                        ", ".join(SELECTORS["reference_rows"])
+                    )
                     reference_appear_script = (
                         r"""
                         (() => {
@@ -832,8 +846,8 @@ class EmbeddedBrowserClient:
                           return document.querySelectorAll(selector).length > 0;
                         })()
                         """
-                        .replace("__REFERENCE_SUMMARY_PATTERN__", js_regex_pattern(REFERENCE_SUMMARY_PATTERN))
-                        .replace("__REFERENCE_ROWS_SELECTOR__", js_string(", ".join(SELECTORS["reference_rows"])))
+                        .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
+                        .replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
                     )
                     await self._wait_for_condition(
                         reference_appear_script,
@@ -898,6 +912,14 @@ class EmbeddedBrowserClient:
         self,
         reference_callback: Callable[[dict[str, str]], Any] | None = None,
     ) -> tuple[list[dict[str, str]], int]:
+        reference_summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
+        reference_rows_selector = js_string(
+            ", ".join(SELECTORS["reference_rows"])
+        )
+        reference_expand_selectors = js_selector_list(
+            SELECTORS["reference_expand"]
+        )
+        more_references_text = js_string(SELECTORS["reference_more_text"])
         expected_script = (
             r"""
             (() => {
@@ -947,9 +969,9 @@ class EmbeddedBrowserClient:
               return expected;
             })()
             """
-            .replace("__REFERENCE_SUMMARY_PATTERN__", js_regex_pattern(REFERENCE_SUMMARY_PATTERN))
-            .replace("__REFERENCE_ROWS_SELECTOR__", js_string(", ".join(SELECTORS["reference_rows"])))
-            .replace("__REFERENCE_EXPAND_SELECTORS__", js_selector_list(SELECTORS["reference_expand"]))
+            .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
+            .replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
+            .replace("__REFERENCE_EXPAND_SELECTORS__", reference_expand_selectors)
         )
         expected = (await self._run_script(expected_script)) or 0
         await self._wait_for_condition(
@@ -962,8 +984,8 @@ class EmbeddedBrowserClient:
                   return new RegExp(pattern).test(document.body.innerText || '');
                 })()
                 """
-                .replace("__REFERENCE_SUMMARY_PATTERN__", js_regex_pattern(REFERENCE_SUMMARY_PATTERN))
-                .replace("__REFERENCE_ROWS_SELECTOR__", js_string(", ".join(SELECTORS["reference_rows"])))
+                .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
+                .replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
             ),
             timeout=REFERENCE_APPEAR_TIMEOUT_SECONDS,
             interval=0.1,
@@ -1013,7 +1035,7 @@ class EmbeddedBrowserClient:
                       return false;
                     })()
                     """
-                    .replace("__MORE_REFERENCES_TEXT__", js_string(SELECTORS["reference_more_text"]))
+                    .replace("__MORE_REFERENCES_TEXT__", more_references_text)
                 ),
             )
             await asyncio.sleep(REFERENCE_POLL_INTERVAL_SECONDS)
@@ -1031,13 +1053,11 @@ class EmbeddedBrowserClient:
         if expected and len(rows) < expected:
             snapshot = await self._debug_snapshot()
             snapshot_path = self.user_data_dir / ".doubao-debug-snapshot.json"
-            try:
+            with suppress(OSError):
                 snapshot_path.write_text(
                     json.dumps(snapshot, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
-            except OSError:
-                pass
             preview = snapshot.get("bodyPreview", "")
             raise ReferenceExpansionError(
                 f"参考资料未完整展开：页面标明 {expected} 篇，实际识别到 {len(rows)} 篇。"

@@ -53,7 +53,7 @@ from PySide6.QtWidgets import (
 from .account_manager import BrowserAccountPool, normalize_account_id
 from .config import RuntimeConfig, SettingsStore
 from .embedded_browser_client import EmbeddedBrowserClient
-from .platform_editor import PLATFORM_CATEGORIES, add_entries, all_entries
+from .platform_editor import add_entries, all_entries
 from .research_export import build_results_workbook
 from .research_import import normalize_keywords, parse_keyword_file
 from .research_scheduler import ResearchScheduler
@@ -428,7 +428,13 @@ class DonutChart(QWidget):
 
 
 class PlatformDistributionRow(QWidget):
-    def __init__(self, row: dict[str, Any], total: int, color: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        row: dict[str, Any],
+        total: int,
+        color: str,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         count = int(row["count"])
         share = count / total * 100 if total else 0.0
@@ -2133,7 +2139,9 @@ class NativeDashboard(QWidget):
                     export = QPushButton("导出")
                     export.setObjectName("secondaryButton")
                     export.clicked.connect(
-                        lambda _, jid=row["id"], name=row["name"]: self.export_job_results(jid, name)
+                        lambda _,
+                        jid=row["id"],
+                        name=row["name"]: self.export_job_results(jid, name)
                     )
                     rename = QPushButton("重命名")
                     rename.setObjectName("secondaryButton")

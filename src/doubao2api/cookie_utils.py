@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 _DOUBAO_DOMAINS = {"doubao.com", "www.doubao.com", ".doubao.com"}
 
 

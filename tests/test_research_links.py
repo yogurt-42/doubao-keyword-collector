@@ -1,6 +1,3 @@
-from doubao2api.research_links import normalize_thinking_references, platform_for_url
-
-
 from doubao2api.research_links import (
     extract_research_links,
     normalize_thinking_references,

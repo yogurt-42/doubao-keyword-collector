@@ -17,10 +17,10 @@ if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from doubao2api.research_platforms import (  # noqa: E402
-    PLATFORM_CATEGORIES,
-    PLATFORM_ENTRIES,
     _DOMAIN_ENTRIES,
     _NAME_TO_CATEGORY,
+    PLATFORM_CATEGORIES,
+    PLATFORM_ENTRIES,
 )
 
 TARGET_FILE = Path(__file__).resolve().parent / "research_platforms.py"
