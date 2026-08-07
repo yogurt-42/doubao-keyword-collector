@@ -8,7 +8,7 @@
 
 **豆包关键词资料采集器（开源版）** `v0.5.2`
 
-本地优先的非官方关键词调研工具：管理多个豆包账号，批量提问，自动展开回答中的“参考资料”区域，提取资料链接、平台名、平台类型，存入本地 SQLite，支持筛选、导出 Excel、信源对比。
+本地优先的非官方关键词调研工具：管理多个豆包账号，批量提问，自动展开回答中的“参考资料”区域，提取资料链接、平台名、平台类型，存入本地 SQLite，支持筛选、导出 Excel、信源对比、长尾信源分析。
 
 ---
 
@@ -43,7 +43,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 │   ├── windows_entry.py          # 桌面 EXE 入口
 │   ├── __main__.py               # 服务端入口
 │   ├── desktop.py                # Qt 主窗口、账号标签、浏览器桥接
-│   ├── native_dashboard.py       # 原生管理面板（6 个页签）
+│   ├── native_dashboard.py       # 原生管理面板（7 个页签）
 │   ├── account_manager.py        # 账号池
 │   ├── browser_client.py         # Playwright 客户端
 │   ├── embedded_browser_client.py# Qt WebEngine 客户端
@@ -85,7 +85,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 ---
 
-## 6. 桌面端 6 个页签
+## 6. 桌面端 7 个页签
 
 | 页签 | 主要功能 | 关键方法/文件 |
 |------|----------|---------------|
@@ -93,6 +93,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 | 账号环境 | 创建/启动/关闭/重命名/删除账号，处理验证码恢复 | `refresh_accounts()` / `account_manager.py` |
 | 历史任务 | 查看已完成/失败任务，导出 Excel、重命名、删除、同步平台信息 | `refresh_history()` / `export_job_results()` / `rename_job()` / `sync_platform_info()` |
 | 采集结果 | 筛选结果、查看信源分布、导出 Excel | `refresh_results()` / `result_dashboard()` |
+| 长尾信源 | 按频次/广度/密度识别垂直长尾宝藏平台，气泡四象限图可视化，支持悬停、导出 Excel | `analyze_long_tail()` / `LongTailChart` |
 | 信源对比 | A/B 两个日期区间对比平台变化 | `refresh_source_comparison()` |
 | 平台信息 | 查看当前平台规则库，导入 Excel 扩展 | `refresh_platforms()` / `platform_editor.add_entries()` |
 
@@ -127,6 +128,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 - 历史任务支持“重命名”。
 - 历史任务标题栏新增“同步平台信息”按钮，按最新规则回填缺失的平台类型。
 - 结果页切换任务卡死问题已修复（临时切换 `ResizeMode` + `blockSignals`）。
+- 新增“长尾信源”独立页签：按频次/广度/密度识别垂直长尾宝藏平台，支持气泡四象限图、悬停查看、Excel 导出。
 
 ---
 
@@ -134,12 +136,11 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | 平台类型改造、平台信息管理、信源分布、信源对比、账号暂停/恢复、历史任务导出/重命名/同步平台信息 |
-| ⏳ Phase 1 | 长尾信源分析 UI（Top 20 之后平台、按类型聚合） |
-| ⏳ Phase 2 | Web UI 与 Native 对齐（历史任务、信源对比、平台信息、图表） |
-| ⏳ Phase 3 | 账号置顶 |
-| ⏳ Phase 4 | 定时任务 |
-| ⏳ Phase 5 | 性能优化专项 |
+| ✅ 已完成 | 平台类型改造、平台信息管理、信源分布、信源对比、账号暂停/恢复、历史任务导出/重命名/同步平台信息、长尾信源分析 |
+| ⏳ Phase 1 | Web UI 与 Native 对齐（历史任务、信源对比、平台信息、长尾信源、图表） |
+| ⏳ Phase 2 | 账号置顶 |
+| ⏳ Phase 3 | 定时任务 |
+| ⏳ Phase 4 | 性能优化专项 |
 
 ---
 

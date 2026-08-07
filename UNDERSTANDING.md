@@ -164,9 +164,29 @@ D:\ai-source-capturer\doubao-keyword-collector
     - `add_result()`：实时写入单条链接。
     - `result_dashboard()` / `source_comparison()` / `list_results()`：筛选与聚合。
     - `sync_platform_info()`：按最新规则回填缺失的 `platform_type`。
+    - `long_tail_analysis()`：按平台聚合频次、关键词覆盖广度、密度，返回四象限分类与代表性链接/域名。
     - `rename_account_references()` / `remove_account_references()`：账号重命名/删除时同步数据库引用。
 
-### 5.6 平台映射：`research_platforms.py`
+### 5.6 长尾信源分析
+
+- `research_store.long_tail_analysis()`：
+  - 输入：与 `list_results()` 相同的筛选条件（任务、平台、账号、日期）+ 分类阈值。
+  - 指标：每个平台的 `freq`（总频次）、`breadth`（覆盖不同关键词数）、`density = freq / breadth`（平均引用密度）。
+  - 分类：
+    - 垂直长尾宝藏（高广度 + 低频次 + 低密度）
+    - 虚假长尾(噪声)（高广度 + 低频次 + 极高密度）
+    - 头部主流媒体（高广度 + 高频次）
+    - 特定品类垂直站（低广度 + 高频次）
+    - 普通垂直信源 / 一次性/僵尸信源
+  - 输出：代表性链接/域名、覆盖关键词示例、四象限统计。
+- `native_dashboard.LongTailChart`：
+  - matplotlib + QtAgg 后端，气泡大小映射密度，颜色映射象限。
+  - 支持 X/Y 轴独立对数刻度、悬停提示、阈值分割线。
+  - 对拥挤的低频次/低广度区域做小幅确定性抖动并缩小僵尸信源点。
+- `native_dashboard.analyze_long_tail()` / `export_long_tail_excel()` / `copy_long_tail_keywords()`：
+  - 独立“长尾信源”页签触发分析并导出优质长尾名单。
+
+### 5.7 平台映射：`research_platforms.py`
 
 - 平台规则库的唯一事实来源。
 - `PLATFORM_CATEGORIES`：15 个中文类型，如“综合新闻门户”“企业官网/品牌站”“短视频/社交媒体”等。
@@ -227,17 +247,19 @@ D:\ai-source-capturer\doubao-keyword-collector
 ### 5.13 管理界面：`native_dashboard.py`
 
 - `NativeDashboard`
-  - 内部 `QTabWidget` 包含 6 个页签：新建采集、账号环境、历史任务、采集结果、信源对比、平台信息。
+  - 内部 `QTabWidget` 包含 7 个页签：新建采集、账号环境、历史任务、采集结果、长尾信源、信源对比、平台信息。
   - `DesktopBackend` 提供账号池、调度器、数据存储。
   - 3 秒定时刷新 + 5 秒结果/对比刷新。
   - 关键方法：
-    - `_build_tasks_page()` / `_build_accounts_page()` / `_build_history_page()` / `_build_results_page()` / `_build_comparison_page()` / `_build_platforms_page()`。
-    - `refresh_accounts()` / `refresh_jobs()` / `refresh_history()` / `refresh_results()` / `refresh_source_comparison()` / `refresh_platforms()`。
+    - `_build_tasks_page()` / `_build_accounts_page()` / `_build_history_page()` / `_build_results_page()` / `_build_long_tail_page()` / `_build_comparison_page()` / `_build_platforms_page()`。
+    - `refresh_accounts()` / `refresh_jobs()` / `refresh_history()` / `refresh_results()` / `refresh_long_tail_options()` / `refresh_source_comparison()` / `refresh_platforms()`。
     - `create_job()`：读取表单 → `research_store.create_job()` → `scheduler.wake()`。
+    - `analyze_long_tail()`：按筛选范围和阈值计算四象限并渲染 matplotlib 气泡图。
     - `export_job_results()`：历史任务行内导出 Excel。
     - `rename_job()`：历史任务重命名。
     - `sync_platform_info()`：按最新规则回填历史记录平台类型。
 - `SourceDistributionChart`：自定义 QPainter 甜甜圈图 + 平台列表。
+- `LongTailChart`：基于 matplotlib 的气泡四象限图，支持悬停提示、X/Y 对数刻度。
 - `MultiSelectFilter`：带搜索、全选/清空的关键词下拉多选。
 
 ### 5.14 Web 界面：`static/index.html`
@@ -353,7 +375,7 @@ account_runtime (
 
 - `DesktopWindow`：主窗口，包含 `PersistentTabWidget`。
 - `PersistentTabWidget`：使用 `QStackedLayout.StackAll`，后台浏览器页面保持活跃不被隐藏。
-- `NativeDashboard`：index 0 的“采集管理中心”标签，内部再用 `QTabWidget` 切分 6 个页面。
+- `NativeDashboard`：index 0 的“采集管理中心”标签，内部再用 `QTabWidget` 切分 7 个页面。
 - `QtBrowserBridge`：通过 Signal/Slot 在主线程操作 Qt WebEngine 标签页，避免跨线程问题。
 - `DesktopBackend`：在独立线程运行 asyncio 事件循环，UI 通过 `submit()` / `call()` 提交协程/同步函数，通过 `_watch()` 轮询 Future 结果。
 
@@ -387,6 +409,7 @@ account_runtime (
 - 框架：pytest + pytest-asyncio。
 - 测试位置：`tests/`。
 - 当前覆盖：
+  - `test_long_tail_analysis.py`：长尾信源聚合、分类、代表性链接提取。
   - `test_research_links.py`：平台映射、链接归一化。
   - `test_research_platforms.py`：平台库。
   - `test_research_store.py`：数据库操作、任务生命周期、索引、平台回填。
@@ -440,4 +463,4 @@ account_runtime (
 - 所有账号数据、Cookie、数据库均保存在本地。
 - 桌面模式依赖 PySide6 可选依赖；服务端模式不需要 GUI。
 - 页面结构变化后需要更新 `selectors.py` 中的选择器。
-- P0/P1 阶段修复与平台类型改造已全部完成；后续重点为长尾分析、Web UI 对齐、账号置顶、定时任务、性能优化（详见 `ROADMAP.md`）。
+- P0/P1 阶段修复、平台类型改造、长尾信源分析已全部完成；后续重点为 Web UI 对齐、账号置顶、定时任务、性能优化（详见 `ROADMAP.md`）。

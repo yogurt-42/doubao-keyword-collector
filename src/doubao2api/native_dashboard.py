@@ -10,10 +10,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openpyxl import load_workbook
-from PySide6.QtCore import QDate, QEvent, QRectF, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPainter, QShortcut
-from PySide6.QtWidgets import (
+import matplotlib
+
+matplotlib.use("QtAgg")
+matplotlib.rcParams["font.sans-serif"] = [
+    "Microsoft YaHei",
+    "SimHei",
+    "SimSun",
+    "sans-serif",
+]
+matplotlib.rcParams["axes.unicode_minus"] = False
+
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
+from openpyxl import Workbook, load_workbook  # noqa: E402
+from PySide6.QtCore import QDate, QEvent, QRectF, Qt, QTimer, QUrl, Signal  # noqa: E402
+from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPainter, QShortcut  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
     QAbstractItemView,
     QApplication,
     QCalendarWidget,
@@ -21,6 +34,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -50,14 +64,14 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
-from .account_manager import BrowserAccountPool, normalize_account_id
-from .config import RuntimeConfig, SettingsStore
-from .embedded_browser_client import EmbeddedBrowserClient
-from .platform_editor import add_entries, all_entries
-from .research_export import build_results_workbook
-from .research_import import normalize_keywords, parse_keyword_file
-from .research_scheduler import ResearchScheduler
-from .research_store import ResearchStore
+from .account_manager import BrowserAccountPool, normalize_account_id  # noqa: E402
+from .config import RuntimeConfig, SettingsStore  # noqa: E402
+from .embedded_browser_client import EmbeddedBrowserClient  # noqa: E402
+from .platform_editor import add_entries, all_entries  # noqa: E402
+from .research_export import build_results_workbook  # noqa: E402
+from .research_import import normalize_keywords, parse_keyword_file  # noqa: E402
+from .research_scheduler import ResearchScheduler  # noqa: E402
+from .research_store import ResearchStore  # noqa: E402
 
 DEFAULT_PROMPT = "{keyword}"
 STATUS_TEXT = {
@@ -542,6 +556,215 @@ class SourceDistributionChart(QWidget):
         self.list.set_rows(visible, total)
 
 
+class LongTailChart(FigureCanvas):
+    QUADRANT_COLORS = {
+        "垂直长尾宝藏": "#27ae60",
+        "虚假长尾(噪声)": "#e74c3c",
+        "头部主流媒体": "#3498db",
+        "特定品类垂直站": "#f39c12",
+        "普通垂直信源": "#9b59b6",
+        "一次性/僵尸信源": "#95a5a6",
+    }
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        self._figure = Figure(figsize=(7, 5.5), dpi=100)
+        super().__init__(self._figure)
+        self.setParent(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(380)
+        self._axes = self._figure.add_subplot(111)
+        self._data: dict[str, Any] | None = None
+        self._plot_points: list[tuple[str, int, int, float, float, float, str]] = []
+        self._hover_annotation = self._axes.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(10, 10),
+            textcoords="offset points",
+            bbox={
+                "boxstyle": "round,pad=0.3",
+                "fc": "white",
+                "ec": "#738096",
+                "alpha": 0.95,
+            },
+            fontsize=9,
+            color="#252b47",
+            visible=False,
+        )
+        self.mpl_connect("motion_notify_event", self._on_hover)
+        self._draw_empty()
+
+    def set_data(
+        self, data: dict[str, Any], log_scale: bool = False, x_log_scale: bool = False
+    ) -> None:
+        self._data = data
+        self._draw(log_scale, x_log_scale)
+
+    def _draw_empty(self) -> None:
+        self._axes.clear()
+        self._axes.text(
+            0.5,
+            0.5,
+            "点击“分析长尾信源”查看四象限图",
+            horizontalalignment="center",
+            verticalalignment="center",
+            transform=self._axes.transAxes,
+            fontsize=12,
+            color="#738096",
+        )
+        self._axes.axis("off")
+        self._hover_annotation = self._axes.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(10, 10),
+            textcoords="offset points",
+            bbox={
+                "boxstyle": "round,pad=0.3",
+                "fc": "white",
+                "ec": "#738096",
+                "alpha": 0.95,
+            },
+            fontsize=9,
+            color="#252b47",
+            visible=False,
+        )
+        self.draw()
+
+    @staticmethod
+    def _jitter(value: float, key: str, scale: float = 0.22) -> float:
+        h = hash(key) & 0xFFFFFFFF
+        return value + scale * (h / 0xFFFFFFFF * 2 - 1)
+
+    def _point_size(self, density: float, quadrant: str) -> float:
+        size = max(30.0, (max(density, 0.1) ** 0.5) * 80.0)
+        if quadrant == "一次性/僵尸信源":
+            size *= 0.6
+        return size
+
+    def _draw(self, log_scale: bool, x_log_scale: bool) -> None:
+        self._axes.clear()
+        self._plot_points = []
+        self._hover_annotation = self._axes.annotate(
+            "",
+            xy=(0, 0),
+            xytext=(10, 10),
+            textcoords="offset points",
+            bbox={
+                "boxstyle": "round,pad=0.3",
+                "fc": "white",
+                "ec": "#738096",
+                "alpha": 0.95,
+            },
+            fontsize=9,
+            color="#252b47",
+            visible=False,
+        )
+        if not self._data or not self._data.get("platforms"):
+            self._draw_empty()
+            return
+
+        platforms = self._data["platforms"]
+        params = self._data["params"]
+        x_values: list[float] = []
+        y_values: list[float] = []
+        sizes: list[float] = []
+        colors: list[str] = []
+        for point in platforms:
+            breadth = point["breadth"]
+            freq = point["freq"]
+            x_plot = self._jitter(float(breadth), point["platform"] + "x")
+            y_plot = self._jitter(float(freq), point["platform"] + "y")
+            x_plot = max(0.3, x_plot) if x_log_scale else max(0.0, x_plot)
+            y_plot = max(0.3, y_plot) if log_scale else max(0.0, y_plot)
+            self._plot_points.append(
+                (
+                    point["platform"],
+                    breadth,
+                    freq,
+                    x_plot,
+                    y_plot,
+                    point["density"],
+                    point["quadrant"],
+                )
+            )
+            x_values.append(x_plot)
+            y_values.append(y_plot)
+            sizes.append(self._point_size(point["density"], point["quadrant"]))
+            colors.append(self.QUADRANT_COLORS.get(point["quadrant"], "#333333"))
+
+        self._axes.scatter(
+            x_values,
+            y_values,
+            s=sizes,
+            c=colors,
+            alpha=0.75,
+            edgecolors="white",
+            linewidths=0.8,
+        )
+
+        if params["split_mode"] == "median":
+            x_line = params.get("medians", {}).get("breadth", 0)
+            y_line = params.get("medians", {}).get("freq", 0)
+        else:
+            x_line = params["breadth_threshold"] - 0.5
+            y_line = params["freq_threshold"]
+        if x_line > 0:
+            self._axes.axvline(x=x_line, color="#e74c3c", linestyle="--", linewidth=1)
+        if y_line > 0:
+            self._axes.axhline(y=y_line, color="#e74c3c", linestyle="--", linewidth=1)
+
+        if x_values and y_values:
+            x_min = max(0.5, min(x_values) * 0.8) if x_log_scale else 0.0
+            x_max = max(x_values) * 1.15
+            y_min = 0.5 if log_scale else 1.0
+            y_max = max(y_values) * 1.15
+            self._axes.set_xlim(x_min, x_max)
+            self._axes.set_ylim(y_min, y_max)
+
+        self._axes.set_xlabel("关键词覆盖广度", fontsize=10)
+        self._axes.set_ylabel("引用频次", fontsize=10)
+        self._axes.set_title(
+            "气泡大小 = 平均引用密度，悬停查看平台名称", fontsize=11, color="#252b47"
+        )
+        if x_log_scale:
+            self._axes.set_xscale("log")
+        if log_scale:
+            self._axes.set_yscale("log")
+        self._axes.grid(True, linestyle=":", alpha=0.5)
+        self._axes.set_axisbelow(True)
+        self._figure.tight_layout()
+        self.draw()
+
+    def _on_hover(self, event: Any) -> None:
+        if not self._plot_points or event.inaxes != self._axes:
+            self._hover_annotation.set_visible(False)
+            self.draw_idle()
+            return
+
+        nearest: tuple[str, int, int, float, float, float, str] | None = None
+        min_distance = float("inf")
+        threshold = 20.0
+        for platform, breadth, freq, x_plot, y_plot, density, quadrant in self._plot_points:
+            pixel_x, pixel_y = self._axes.transData.transform((x_plot, y_plot))
+            distance = ((pixel_x - event.x) ** 2 + (pixel_y - event.y) ** 2) ** 0.5
+            if distance < min_distance:
+                min_distance = distance
+                nearest = (platform, breadth, freq, x_plot, y_plot, density, quadrant)
+
+        if nearest is None or min_distance > threshold:
+            self._hover_annotation.set_visible(False)
+        else:
+            platform, breadth, freq, x_plot, y_plot, density, quadrant = nearest
+            self._hover_annotation.set_text(
+                f"{platform}\n广度 {breadth} · 频次 {freq} · 密度 {density}\n{quadrant}"
+            )
+            self._hover_annotation.xy = (x_plot, y_plot)
+            self._hover_annotation.set_visible(True)
+        self.draw_idle()
+
+    def wheelEvent(self, event: Any) -> None:
+        event.ignore()
+
+
 class DesktopBackend:
     def __init__(self, bridge: Any, runtime: RuntimeConfig) -> None:
         self.bridge = bridge
@@ -630,6 +853,8 @@ class NativeDashboard(QWidget):
         self.result_signature: tuple[Any, ...] | None = None
         self.result_filter_signature: tuple[Any, ...] | None = None
         self.comparison_signature: tuple[Any, ...] | None = None
+        self.long_tail_data: dict[str, Any] | None = None
+        self.analyzing_long_tail = False
         self.results_focus_mode = False
         self._window_was_maximized = False
         self._window_was_fullscreen = False
@@ -730,15 +955,17 @@ class NativeDashboard(QWidget):
         self.accounts_page = self._build_accounts_page()
         self.history_page = self._build_history_page()
         self.results_page = self._build_results_page()
+        self.long_tail_page = self._build_long_tail_page()
         self.comparison_page = self._build_comparison_page()
         self.platforms_page = self._build_platforms_page()
         self.sections.addTab(self.tasks_page, "新建采集")
         self.sections.addTab(self.accounts_page, "账号环境")
         self.sections.addTab(self.history_page, "历史任务")
         self.sections.addTab(self.results_page, "采集结果")
+        self.sections.addTab(self.long_tail_page, "长尾信源")
         self.sections.addTab(self.comparison_page, "信源对比")
         self.sections.addTab(self.platforms_page, "平台信息")
-        self.sections.currentChanged.connect(lambda _: self.refresh_all())
+        self.sections.currentChanged.connect(self._on_section_changed)
         root.addWidget(self.sections, 1)
 
     def _metric_card(self, title: str, accent: str) -> tuple[QFrame, QLabel]:
@@ -1064,6 +1291,172 @@ class NativeDashboard(QWidget):
         )
         self.results_table.cellDoubleClicked.connect(self._open_result_cell)
         layout.addWidget(self.results_table, 1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(page)
+        return scroll
+
+    def _build_long_tail_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 8, 4, 4)
+        layout.setSpacing(12)
+
+        intro = QLabel(
+            "识别跨多个关键词反复出现、但总量小的优质信源平台（气泡大小 = 平均引用密度）"
+        )
+        intro.setObjectName("workflowBanner")
+        layout.addWidget(intro)
+
+        scope = QGroupBox("分析范围")
+        scope_layout = QGridLayout(scope)
+        scope_layout.setHorizontalSpacing(12)
+        scope_layout.setVerticalSpacing(8)
+
+        self.long_tail_job = QComboBox()
+        self.long_tail_job.addItem("全部任务", "")
+        scope_layout.addWidget(QLabel("任务"), 0, 0)
+        scope_layout.addWidget(self.long_tail_job, 0, 1)
+
+        self.long_tail_platform = QComboBox()
+        self.long_tail_platform.addItem("全部平台", "")
+        scope_layout.addWidget(QLabel("平台"), 0, 2)
+        scope_layout.addWidget(self.long_tail_platform, 0, 3)
+
+        self.long_tail_account = QComboBox()
+        self.long_tail_account.addItem("全部账号", "")
+        scope_layout.addWidget(QLabel("账号"), 0, 4)
+        scope_layout.addWidget(self.long_tail_account, 0, 5)
+
+        self.long_tail_date_enabled = QCheckBox("启用日期筛选")
+        self.long_tail_date_from = QDateEdit(QDate.currentDate().addDays(-30))
+        self.long_tail_date_to = QDateEdit(QDate.currentDate())
+        for editor in (self.long_tail_date_from, self.long_tail_date_to):
+            editor.setCalendarPopup(True)
+            editor.setDisplayFormat("yyyy-MM-dd")
+            editor.setMinimumWidth(120)
+        scope_layout.addWidget(self.long_tail_date_enabled, 1, 0)
+        scope_layout.addWidget(self.long_tail_date_from, 1, 1)
+        scope_layout.addWidget(QLabel("至"), 1, 2)
+        scope_layout.addWidget(self.long_tail_date_to, 1, 3)
+        scope_layout.setColumnStretch(5, 1)
+        layout.addWidget(scope)
+
+        params_group = QGroupBox("分类阈值")
+        params_layout = QGridLayout(params_group)
+        params_layout.setHorizontalSpacing(12)
+        params_layout.setVerticalSpacing(8)
+
+        self.long_tail_split_mode = QComboBox()
+        self.long_tail_split_mode.addItem("业务阈值", "threshold")
+        self.long_tail_split_mode.addItem("中位数", "median")
+        params_layout.addWidget(QLabel("分割"), 0, 0)
+        params_layout.addWidget(self.long_tail_split_mode, 0, 1)
+
+        self.long_tail_breadth_threshold = QSpinBox()
+        self.long_tail_breadth_threshold.setRange(1, 9999)
+        self.long_tail_breadth_threshold.setValue(3)
+        self.long_tail_breadth_threshold.setToolTip("高广度的判定阈值")
+        params_layout.addWidget(QLabel("广度≥"), 0, 2)
+        params_layout.addWidget(self.long_tail_breadth_threshold, 0, 3)
+
+        self.long_tail_freq_threshold = QSpinBox()
+        self.long_tail_freq_threshold.setRange(1, 99999)
+        self.long_tail_freq_threshold.setValue(20)
+        self.long_tail_freq_threshold.setToolTip("低频次的判定阈值")
+        params_layout.addWidget(QLabel("频次≤"), 0, 4)
+        params_layout.addWidget(self.long_tail_freq_threshold, 0, 5)
+
+        self.long_tail_density_threshold = QDoubleSpinBox()
+        self.long_tail_density_threshold.setRange(0.1, 999.0)
+        self.long_tail_density_threshold.setValue(5.0)
+        self.long_tail_density_threshold.setDecimals(1)
+        self.long_tail_density_threshold.setSingleStep(0.5)
+        self.long_tail_density_threshold.setToolTip("目标长尾的最大密度")
+        params_layout.addWidget(QLabel("密度≤"), 1, 0)
+        params_layout.addWidget(self.long_tail_density_threshold, 1, 1)
+
+        self.long_tail_noise_density = QDoubleSpinBox()
+        self.long_tail_noise_density.setRange(1.0, 999.0)
+        self.long_tail_noise_density.setValue(20.0)
+        self.long_tail_noise_density.setDecimals(1)
+        self.long_tail_noise_density.setSingleStep(0.5)
+        self.long_tail_noise_density.setToolTip("虚假长尾的最小密度")
+        params_layout.addWidget(QLabel("虚假密度≥"), 1, 2)
+        params_layout.addWidget(self.long_tail_noise_density, 1, 3)
+
+        self.long_tail_log_scale = QCheckBox("Y 轴对数")
+        self.long_tail_log_scale.setChecked(True)
+        params_layout.addWidget(self.long_tail_log_scale, 1, 4)
+
+        self.long_tail_x_log_scale = QCheckBox("X 轴对数")
+        params_layout.addWidget(self.long_tail_x_log_scale, 1, 5)
+
+        analyze_button = QPushButton("分析长尾信源")
+        analyze_button.setObjectName("primaryButton")
+        analyze_button.clicked.connect(self.analyze_long_tail)
+        params_layout.addWidget(analyze_button, 1, 6)
+        params_layout.setColumnStretch(6, 1)
+        layout.addWidget(params_group)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(10)
+        export_button = QPushButton("导出优质长尾 Excel")
+        export_button.setObjectName("secondaryButton")
+        export_button.clicked.connect(self.export_long_tail_excel)
+        copy_button = QPushButton("复制信源限定词")
+        copy_button.setObjectName("linkButton")
+        copy_button.clicked.connect(self.copy_long_tail_keywords)
+        actions.addWidget(export_button)
+        actions.addWidget(copy_button)
+        actions.addStretch()
+        layout.addLayout(actions)
+
+        self.long_tail_summary = QLabel("设置分析范围后，点击“分析长尾信源”查看四象限图与推荐名单")
+        self.long_tail_summary.setObjectName("muted")
+        self.long_tail_summary.setWordWrap(True)
+        layout.addWidget(self.long_tail_summary)
+
+        self.long_tail_tabs = QTabWidget()
+        self.long_tail_target_table = QTableWidget(0, 8)
+        self.long_tail_target_table.setHorizontalHeaderLabels(
+            ["平台", "域名", "代表性链接", "频次", "广度", "密度", "类型", "覆盖关键词"]
+        )
+        self._configure_table(self.long_tail_target_table)
+        self.long_tail_target_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.long_tail_target_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.long_tail_target_table.cellDoubleClicked.connect(self._open_long_tail_link)
+
+        self.long_tail_quadrant_table = QTableWidget(0, 6)
+        self.long_tail_quadrant_table.setHorizontalHeaderLabels(
+            ["象限", "平台", "频次", "广度", "密度", "类型"]
+        )
+        self._configure_table(self.long_tail_quadrant_table)
+        self.long_tail_quadrant_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.long_tail_quadrant_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+
+        self.long_tail_tabs.addTab(self.long_tail_target_table, "长尾推荐")
+        self.long_tail_tabs.addTab(self.long_tail_quadrant_table, "象限清单")
+        self.long_tail_tabs.setMaximumHeight(420)
+        self.long_tail_target_table.setMinimumHeight(260)
+        self.long_tail_quadrant_table.setMinimumHeight(260)
+
+        body = QVBoxLayout()
+        body.setSpacing(12)
+        self.long_tail_chart = LongTailChart()
+        body.addWidget(self.long_tail_chart, 3)
+        body.addWidget(self.long_tail_tabs, 1)
+        layout.addLayout(body, 1)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1821,6 +2214,41 @@ class NativeDashboard(QWidget):
             self.refresh_history()
         elif current is self.platforms_page:
             self.refresh_platforms()
+
+    def _on_section_changed(self, _: int) -> None:
+        self.refresh_all()
+        if self.sections.currentWidget() is self.long_tail_page:
+            self.refresh_long_tail_options()
+
+    def refresh_long_tail_options(self) -> None:
+        def load() -> tuple[Any, ...]:
+            return (
+                self.backend.research_store.result_jobs(),
+                self.backend.research_store.platforms(),
+                self.backend.research_store.result_accounts(),
+            )
+
+        future = self.backend.call(load)
+
+        def apply(payload: tuple[Any, ...]) -> None:
+            jobs, platforms, accounts = payload
+            self._update_combo(
+                self.long_tail_job,
+                [(f"{job['name']}（{job['result_count']}）", job["id"]) for job in jobs],
+                "全部任务",
+            )
+            self._update_combo(
+                self.long_tail_platform,
+                [(value, value) for value in platforms],
+                "全部平台",
+            )
+            self._update_combo(
+                self.long_tail_account,
+                [(value, value) for value in accounts],
+                "全部账号",
+            )
+
+        self._watch(future, apply, label="刷新长尾选项", silent=True)
 
     def refresh_accounts(self) -> None:
         if self.refreshing_accounts:
@@ -2730,3 +3158,223 @@ class NativeDashboard(QWidget):
             ),
             label="导出 Excel",
         )
+
+    def analyze_long_tail(self) -> None:
+        if self.analyzing_long_tail:
+            return
+        self.analyzing_long_tail = True
+        job_id = str(self.long_tail_job.currentData() or "")
+        platform = str(self.long_tail_platform.currentData() or "")
+        account_id = str(self.long_tail_account.currentData() or "")
+        date_from = ""
+        date_to = ""
+        if self.long_tail_date_enabled.isChecked():
+            date_from = self.long_tail_date_from.date().toString("yyyy-MM-dd")
+            date_to = self.long_tail_date_to.date().toString("yyyy-MM-dd")
+        split_mode = str(self.long_tail_split_mode.currentData() or "threshold")
+        breadth_threshold = self.long_tail_breadth_threshold.value()
+        freq_threshold = self.long_tail_freq_threshold.value()
+        density_threshold = self.long_tail_density_threshold.value()
+        noise_density = self.long_tail_noise_density.value()
+        log_scale = self.long_tail_log_scale.isChecked()
+        x_log_scale = self.long_tail_x_log_scale.isChecked()
+
+        def load() -> dict[str, Any]:
+            return self.backend.research_store.long_tail_analysis(
+                job_id=job_id,
+                keyword="",
+                platform=platform,
+                account_id=account_id,
+                date_from=date_from,
+                date_to=date_to,
+                split_mode=split_mode,
+                breadth_threshold=breadth_threshold,
+                freq_threshold=freq_threshold,
+                density_threshold=density_threshold,
+                noise_density_threshold=noise_density,
+            )
+
+        future = self.backend.call(load)
+
+        def apply(data: dict[str, Any]) -> None:
+            self.analyzing_long_tail = False
+            self.long_tail_data = data
+            self.long_tail_chart.set_data(data, log_scale=log_scale, x_log_scale=x_log_scale)
+            self._fill_long_tail_tables(data)
+            summary = data["summary"]
+            params = data["params"]
+            self.long_tail_summary.setText(
+                f"总记录 {summary['total_records']} 条 · "
+                f"识别 {summary['platform_count']} 个平台 · "
+                f"目标长尾 {summary['target_count']} 个 · "
+                f"虚假噪声 {summary['noise_count']} 个\n"
+                f"当前阈值：广度≥{params['breadth_threshold']} · "
+                f"频次≤{params['freq_threshold']} · "
+                f"密度≤{params['density_threshold']} · "
+                f"虚假密度≥{params['noise_density_threshold']}"
+            )
+
+        def failed(_: BaseException) -> None:
+            self.analyzing_long_tail = False
+
+        self._watch(
+            future,
+            apply,
+            error_callback=failed,
+            label="长尾信源分析",
+        )
+
+    def _fill_long_tail_tables(self, data: dict[str, Any]) -> None:
+        targets = data["target_long_tail"]
+        self.long_tail_target_table.setRowCount(len(targets))
+        for row_index, row in enumerate(targets):
+            values = [
+                row["platform"],
+                row["domain"],
+                row["representative_link"],
+                str(row["freq"]),
+                str(row["breadth"]),
+                str(row["density"]),
+                row["type"] or "未分类",
+                "、".join(row["keywords_sample"]),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column == 2 and value:
+                    item.setToolTip(value)
+                    item.setForeground(QColor("#4f51c8"))
+                self.long_tail_target_table.setItem(row_index, column, item)
+
+        all_rows: list[dict[str, Any]] = []
+        quadrant_order = [
+            "垂直长尾宝藏",
+            "虚假长尾(噪声)",
+            "头部主流媒体",
+            "特定品类垂直站",
+            "普通垂直信源",
+            "一次性/僵尸信源",
+        ]
+        order_index = {name: index for index, name in enumerate(quadrant_order)}
+        for quadrant, items in data["quadrants"].items():
+            for item in items:
+                all_rows.append({**item, "quadrant": quadrant})
+        all_rows.sort(key=lambda row: (order_index.get(row["quadrant"], 99), -row["freq"]))
+
+        self.long_tail_quadrant_table.setRowCount(len(all_rows))
+        for row_index, row in enumerate(all_rows):
+            values = [
+                row["quadrant"],
+                row["platform"],
+                str(row["freq"]),
+                str(row["breadth"]),
+                str(row["density"]),
+                row["type"] or "未分类",
+            ]
+            for column, value in enumerate(values):
+                self.long_tail_quadrant_table.setItem(row_index, column, QTableWidgetItem(value))
+
+    def export_long_tail_excel(self) -> None:
+        if not self.long_tail_data:
+            QMessageBox.information(self, "提示", "请先点击“分析长尾信源”")
+            return
+        targets = self.long_tail_data["target_long_tail"]
+        if not targets:
+            QMessageBox.information(self, "提示", "当前没有可导出的优质长尾信源")
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出优质长尾信源",
+            f"优质长尾信源_{QDate.currentDate().toString('yyyyMMdd')}.xlsx",
+            "Excel 工作簿 (*.xlsx)",
+        )
+        if not filename:
+            return
+        if not filename.casefold().endswith(".xlsx"):
+            filename += ".xlsx"
+
+        data = self.long_tail_data
+
+        def export() -> int:
+            params = data["params"]
+            summary = data["summary"]
+            workbook = Workbook()
+            sheet = workbook.active
+            if sheet is None:
+                workbook.create_sheet()
+                sheet = workbook.active
+            assert sheet is not None
+            sheet.append(
+                [
+                    "总参数",
+                    f"总记录数：{summary['total_records']}",
+                    f"目标长尾数：{summary['target_count']}",
+                    (
+                        f"阈值：广度≥{params['breadth_threshold']}，"
+                        f"频次≤{params['freq_threshold']}，"
+                        f"密度≤{params['density_threshold']}，"
+                        f"虚假密度≥{params['noise_density_threshold']}"
+                    ),
+                ]
+            )
+            sheet.append(
+                [
+                    "URL（域名）",
+                    "平台名",
+                    "代表性链接",
+                    "频次",
+                    "广度",
+                    "密度",
+                    "平台类型",
+                    "覆盖关键词",
+                ]
+            )
+            for row in targets:
+                sheet.append(
+                    [
+                        row["domain"],
+                        row["platform"],
+                        row["representative_link"],
+                        row["freq"],
+                        row["breadth"],
+                        row["density"],
+                        row["type"] or "未分类",
+                        "、".join(row["keywords_sample"]),
+                    ]
+                )
+            workbook.save(filename)
+            return len(targets)
+
+        future = self.backend.call(export)
+        self._watch(
+            future,
+            lambda count: QMessageBox.information(
+                self,
+                "导出完成",
+                f"已导出 {count} 个优质长尾信源：\n{filename}",
+            ),
+            label="导出优质长尾 Excel",
+        )
+
+    def copy_long_tail_keywords(self) -> None:
+        if not self.long_tail_data:
+            QMessageBox.information(self, "提示", "请先点击“分析长尾信源”")
+            return
+        names = [p["platform"] for p in self.long_tail_data["target_long_tail"]]
+        if not names:
+            QMessageBox.information(self, "提示", "当前没有识别到目标长尾信源")
+            return
+        text = "、".join(names)
+        QApplication.clipboard().setText(text)
+        QMessageBox.information(
+            self,
+            "已复制",
+            f"已复制 {len(names)} 个平台限定词到剪贴板",
+        )
+
+    def _open_long_tail_link(self, row: int, _: int) -> None:
+        item = self.long_tail_target_table.item(row, 2)
+        if item is None:
+            return
+        link = item.text()
+        if link:
+            QDesktopServices.openUrl(QUrl(link))

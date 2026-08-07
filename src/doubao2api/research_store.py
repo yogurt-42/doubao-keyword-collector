@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .research_links import platform_for_reference
 from .research_platforms import category_for_url, platform_category
@@ -847,6 +848,185 @@ class ResearchStore:
             "summary": dict(summary),
             "platforms": platform_rows,
             "long_tail": long_tail,
+        }
+
+    def long_tail_analysis(
+        self,
+        *,
+        job_id: str = "",
+        keyword: str | list[str] = "",
+        platform: str = "",
+        account_id: str = "",
+        date_from: str = "",
+        date_to: str = "",
+        split_mode: str = "threshold",
+        breadth_threshold: int = 3,
+        freq_threshold: int = 20,
+        density_threshold: float = 5.0,
+        noise_density_threshold: float = 20.0,
+        keywords_sample_limit: int = 10,
+    ) -> dict[str, Any]:
+        """Aggregate platforms and classify them into long-tail quadrants.
+
+        Returns per-platform frequency, keyword breadth, density, a representative
+        link/domain, a keyword sample, and the quadrant classification.
+        """
+        where, params = self._result_filter(
+            job_id=job_id,
+            keyword=keyword,
+            platform=platform,
+            account_id=account_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    platform,
+                    COUNT(*) AS freq,
+                    COUNT(DISTINCT keyword) AS breadth,
+                    COALESCE(MAX(NULLIF(platform_type, '')), '') AS type
+                FROM research_results r
+                {where}
+                    AND platform <> ''
+                GROUP BY platform
+                ORDER BY freq DESC, platform
+                """,
+                params,
+            ).fetchall()
+            link_rows = connection.execute(
+                f"""
+                SELECT platform, link, COUNT(*) AS c
+                FROM research_results r
+                {where}
+                    AND platform <> ''
+                GROUP BY platform, link
+                ORDER BY platform, c DESC, link ASC
+                """,
+                params,
+            ).fetchall()
+            keyword_rows = connection.execute(
+                f"""
+                SELECT DISTINCT platform, keyword
+                FROM research_results r
+                {where}
+                    AND platform <> ''
+                    AND keyword <> ''
+                ORDER BY platform, keyword
+                """,
+                params,
+            ).fetchall()
+            total_row = connection.execute(
+                f"SELECT COUNT(*) FROM research_results r {where}", params
+            ).fetchone()
+        total_records = int(total_row[0]) if total_row else 0
+
+        representative_links: dict[str, str] = {}
+        for row in link_rows:
+            platform = row["platform"]
+            if platform not in representative_links:
+                representative_links[platform] = row["link"]
+
+        keywords_by_platform: dict[str, list[str]] = {}
+        for row in keyword_rows:
+            platform = row["platform"]
+            sample = keywords_by_platform.setdefault(platform, [])
+            if len(sample) < keywords_sample_limit:
+                sample.append(row["keyword"])
+
+        platforms: list[dict[str, Any]] = []
+        for row in rows:
+            platform = row["platform"]
+            keywords_sample = keywords_by_platform.get(platform, [])
+            link = representative_links.get(platform, "")
+            domain = urlparse(link).netloc or str(platform)
+            platforms.append(
+                {
+                    "platform": platform,
+                    "domain": domain,
+                    "representative_link": link,
+                    "freq": int(row["freq"]),
+                    "breadth": int(row["breadth"]),
+                    "density": round(int(row["freq"]) / int(row["breadth"]), 2),
+                    "type": row["type"],
+                    "keywords_sample": keywords_sample,
+                }
+            )
+
+        medians: dict[str, float] = {}
+        if split_mode == "median" and platforms:
+            breadth_values = sorted(p["breadth"] for p in platforms)
+            freq_values = sorted(p["freq"] for p in platforms)
+            n = len(breadth_values)
+            medians["breadth"] = (
+                breadth_values[n // 2]
+                if n % 2
+                else (breadth_values[n // 2 - 1] + breadth_values[n // 2]) / 2
+            )
+            medians["freq"] = (
+                freq_values[n // 2]
+                if n % 2
+                else (freq_values[n // 2 - 1] + freq_values[n // 2]) / 2
+            )
+
+        def classify(row: dict[str, Any]) -> str:
+            if split_mode == "median":
+                high_breadth = row["breadth"] >= medians["breadth"]
+                high_freq = row["freq"] > medians["freq"]
+            else:
+                high_breadth = row["breadth"] >= breadth_threshold
+                high_freq = row["freq"] > freq_threshold
+            density = row["density"]
+            if high_breadth and high_freq:
+                return "头部主流媒体"
+            if high_breadth and not high_freq:
+                if density >= noise_density_threshold:
+                    return "虚假长尾(噪声)"
+                if density <= density_threshold:
+                    return "垂直长尾宝藏"
+                return "普通垂直信源"
+            if not high_breadth and high_freq:
+                return "特定品类垂直站"
+            return "一次性/僵尸信源"
+
+        for row in platforms:
+            row["quadrant"] = classify(row)
+
+        quadrant_order = [
+            "垂直长尾宝藏",
+            "虚假长尾(噪声)",
+            "头部主流媒体",
+            "特定品类垂直站",
+            "普通垂直信源",
+            "一次性/僵尸信源",
+        ]
+        quadrants: dict[str, list[dict[str, Any]]] = {name: [] for name in quadrant_order}
+        for row in platforms:
+            quadrants[row["quadrant"]].append(row)
+
+        target_long_tail = [dict(row) for row in platforms if row["quadrant"] == "垂直长尾宝藏"]
+        target_long_tail.sort(key=lambda row: (-row["breadth"], row["density"], row["platform"]))
+
+        return {
+            "params": {
+                "split_mode": split_mode,
+                "breadth_threshold": breadth_threshold,
+                "freq_threshold": freq_threshold,
+                "density_threshold": density_threshold,
+                "noise_density_threshold": noise_density_threshold,
+                "medians": medians,
+            },
+            "summary": {
+                "total_records": total_records,
+                "platform_count": len(platforms),
+                "target_count": len(target_long_tail),
+                "noise_count": len(quadrants["虚假长尾(噪声)"]),
+                "quadrant_counts": {name: len(items) for name, items in quadrants.items() if items},
+            },
+            "platforms": platforms,
+            "target_long_tail": target_long_tail,
+            "quadrants": quadrants,
         }
 
     def result_jobs(self) -> list[dict[str, Any]]:

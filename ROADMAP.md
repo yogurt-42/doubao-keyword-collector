@@ -1,7 +1,7 @@
 # 开发路线图
 
 > 记录已完成事项与下一阶段实施计划。
-> 最近一次更新：2026-08-06
+> 最近一次更新：2026-08-07
 
 ---
 
@@ -20,29 +20,30 @@
 | 9 | 历史任务重命名 | `native_dashboard.py`, `research_store.py` |
 | 10 | 同步平台信息按钮（按最新规则回填旧记录平台类型） | `native_dashboard.py`, `research_store.py` |
 | 11 | 结果页切换任务卡死修复 | `native_dashboard.py` |
+| 12 | 长尾信源分析页（频次/广度/密度四象限、气泡图、悬停提示、Excel 导出） | `native_dashboard.py`, `research_store.py`, `pyproject.toml` |
 
 ---
 
 ## 待完成
 
-### Phase 1：长尾信源分析与图表
+### Phase 1：Web UI 与 Native 对齐
 
-**目标**：展示 Top 20 之后的平台分布及按类型聚合。
+**目标**：让 Web 管理端的结果页具备与 Native 端一致的数据可视化能力。
 
 **文件**：
-- `src/doubao2api/native_dashboard.py`
-- `src/doubao2api/static/index.html`（Phase 2 一起处理）
+- `src/doubao2api/static/index.html`
+- `src/doubao2api/server.py`（如有需要）
 
 **内容**：
-- 在“采集结果”页新增“长尾信源分析”卡片
-- 顶部指标：长尾平台数、资料数、占比
-- 左侧：按平台类型聚合的水平条形图
-- 右侧/下方：Top 长尾平台列表，支持滚动
-- 数据直接读取 `dashboard["long_tail"]`（后端已返回）
+- 结果面板整体可滚动
+- 信源分布与占比（Top 20 / “其他” / 查看全部弹窗）
+- 长尾信源分析面板
+- 结果表格增加“平台类型”列
+- （可选）平台信息管理入口
 
 ---
 
-### Phase 2：Web UI 对齐
+### Phase 2：账号置顶
 
 **目标**：让 Web 管理端的结果页具备与 Native 端一致的数据可视化能力。
 
@@ -311,7 +312,7 @@
 ## 推荐实施顺序
 
 ```
-Phase 1（长尾分析） → Phase 2（Web UI） → Phase 3（账号置顶） → Phase 4（定时任务） → Phase 5（性能专项）
+Phase 1（Web UI 对齐） → Phase 2（账号置顶） → Phase 3（定时任务） → Phase 4（性能专项）
 ```
 
 每完成一个 Phase，先跑全量测试并验收，再进入下一个。

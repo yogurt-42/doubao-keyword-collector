@@ -32,6 +32,7 @@ dependencies = [
 [project.optional-dependencies]
 desktop = [
   "PySide6>=6.8,<7",
+  "matplotlib>=3.9,<4",
 ]
 dev = [
   "httpx>=0.27,<1",
