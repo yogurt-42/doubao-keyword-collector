@@ -34,6 +34,8 @@
 ```powershell
 # 桌面版
 doubao-keyword-collector
+# 或简写
+dkc
 
 # 服务端（默认打开 http://127.0.0.1:9090/admin）
 doubao-account-manager

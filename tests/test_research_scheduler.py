@@ -86,6 +86,7 @@ class ClosedAccountPool(FakePool):
 class FakeStore:
     def __init__(self) -> None:
         self.started: list[str] = []
+        self.task_accounts: dict[str, str] = {}
         self.completed: list[str] = []
         self.failed: list[tuple[str, bool]] = []
         self.tasks = [
@@ -135,6 +136,7 @@ class FakeStore:
 
     def mark_task_running(self, task_id: str, account_id: str) -> bool:
         self.started.append(task_id)
+        self.task_accounts[task_id] = account_id
         return True
 
     def update_task_progress(self, task_id: str, message: str) -> None:
@@ -339,3 +341,85 @@ async def test_scheduler_dispatches_multiple_accounts_in_one_loop() -> None:
 
     pool.release.set()
     await asyncio.gather(*list(scheduler._workers))
+
+
+class LRUAccountPool:
+    def __init__(self) -> None:
+        self.accounts = {account_id: FakeAccount() for account_id in ["账号1", "账号2", "账号3"]}
+
+    def discover_account_ids(self) -> list[str]:
+        return list(self.accounts)
+
+    def get_if_started(self, account_id: str) -> Any:
+        return self.accounts[account_id]
+
+
+class LRUStore(FakeStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runtimes = {
+            "账号1": {
+                "last_used_at": (local_now() - timedelta(minutes=10)).isoformat(),
+                "paused_until": None,
+                "pause_reason": "",
+            },
+            "账号2": {
+                "last_used_at": (local_now() - timedelta(minutes=5)).isoformat(),
+                "paused_until": None,
+                "pause_reason": "",
+            },
+            "账号3": {
+                "last_used_at": iso_now(),
+                "paused_until": None,
+                "pause_reason": "",
+            },
+        }
+
+    def account_runtime(self, account_id: str) -> dict[str, Any]:
+        return self.runtimes.get(
+            account_id,
+            {"last_used_at": None, "paused_until": None, "pause_reason": ""},
+        )
+
+    def mark_account_used(self, account_id: str) -> None:
+        self.runtimes[account_id]["last_used_at"] = iso_now()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_selects_longest_idle_account_first() -> None:
+    store = LRUStore()
+    pool = LRUAccountPool()
+    scheduler = ResearchScheduler(store, pool)  # type: ignore[arg-type]
+
+    # 让两个任务同时到期
+    store.tasks = [
+        {
+            "id": "task-1",
+            "job_id": "job-1",
+            "keyword": "关键词1",
+            "prompt_template": "{keyword}",
+            "account_ids": [],
+            "interval_seconds": 30,
+            "max_attempts": 1,
+            "attempt_count": 0,
+            "scheduled_at": iso_now(),
+        },
+        {
+            "id": "task-2",
+            "job_id": "job-1",
+            "keyword": "关键词2",
+            "prompt_template": "{keyword}",
+            "account_ids": [],
+            "interval_seconds": 30,
+            "max_attempts": 1,
+            "attempt_count": 0,
+            "scheduled_at": iso_now(),
+        },
+    ]
+
+    await scheduler._dispatch_due_tasks()
+    await asyncio.gather(*list(scheduler._workers))
+    await asyncio.sleep(0)
+
+    assert store.task_accounts.get("task-1") == "账号1"
+    assert store.task_accounts.get("task-2") == "账号2"

@@ -16,7 +16,7 @@
 
 | 模式 | 命令 | 入口文件 | 用途 |
 |------|------|----------|------|
-| 桌面版 | `doubao-keyword-collector` | `src/doubao2api/windows_entry.py` | 原生 Qt/PySide6 窗口，推荐 |
+| 桌面版 | `doubao-keyword-collector` / `dkc` | `src/doubao2api/windows_entry.py` | 原生 Qt/PySide6 窗口，推荐 |
 | 服务端 | `doubao-account-manager` | `src/doubao2api/__main__.py` | FastAPI + `/admin` 网页管理端 |
 
 两者共用账号池、调度器、数据库、平台规则库。

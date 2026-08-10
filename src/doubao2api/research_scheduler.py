@@ -175,6 +175,7 @@ class ResearchScheduler:
                 continue
             last_used = _datetime_or_none(runtime.get("last_used_at"))
             available.append((last_used or datetime.min.replace(tzinfo=now.tzinfo), account_id))
+        # 优先分配给最长时间没被分配任务且处于闲置状态的账号（LRU）
         available.sort(key=lambda item: (item[0], item[1]))
 
         for _, account_id in available:

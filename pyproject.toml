@@ -45,6 +45,7 @@ dev = [
 doubao-keyword-collector = "doubao2api.windows_entry:main"
 doubao-account-manager = "doubao2api.__main__:main"
 doubao2api = "doubao2api.__main__:main"
+dkc = "doubao2api.windows_entry:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/doubao2api"]
