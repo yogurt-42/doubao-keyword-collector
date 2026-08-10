@@ -1,7 +1,7 @@
 # 开发路线图
 
 > 记录已完成事项与下一阶段实施计划。
-> 最近一次更新：2026-08-07
+> 最近一次更新：2026-08-10
 
 ---
 
@@ -21,6 +21,7 @@
 | 10 | 同步平台信息按钮（按最新规则回填旧记录平台类型） | `native_dashboard.py`, `research_store.py` |
 | 11 | 结果页切换任务卡死修复 | `native_dashboard.py` |
 | 12 | 长尾信源分析页（频次/广度/密度四象限、气泡图、悬停提示、Excel 导出） | `native_dashboard.py`, `research_store.py`, `pyproject.toml` |
+| 13 | 定时任务（Native）：任务模板 + 触发计划两层模型，支持按间隔/一次性/每日定时触发 | `research_store.py`, `research_scheduler.py`, `native_dashboard.py`, `models.py`, `server.py` |
 
 ---
 
@@ -28,7 +29,7 @@
 
 ### Phase 1：Web UI 与 Native 对齐
 
-**目标**：让 Web 管理端的结果页具备与 Native 端一致的数据可视化能力。
+**目标**：让 Web 管理端具备与 Native 端一致的管理能力。
 
 **文件**：
 - `src/doubao2api/static/index.html`
@@ -39,28 +40,12 @@
 - 信源分布与占比（Top 20 / “其他” / 查看全部弹窗）
 - 长尾信源分析面板
 - 结果表格增加“平台类型”列
+- 定时任务页面（任务模板 + 触发计划两层模型）
 - （可选）平台信息管理入口
 
 ---
 
 ### Phase 2：账号置顶
-
-**目标**：让 Web 管理端的结果页具备与 Native 端一致的数据可视化能力。
-
-**文件**：
-- `src/doubao2api/static/index.html`
-- `src/doubao2api/server.py`（如有需要）
-
-**内容**：
-- 结果面板整体可滚动
-- 信源分布与占比（Top 20 / “其他” / 查看全部弹窗）
-- 长尾信源分析面板
-- 结果表格增加“平台类型”列
-- （可选）平台信息管理入口
-
----
-
-### Phase 3：账号置顶
 
 **目标**：在“账号环境”页为每个账号增加置顶开关，置顶账号标签固定在“采集管理中心”右侧。
 
@@ -100,96 +85,7 @@
 
 ---
 
-### Phase 4：定时任务
-
-**目标**：新增“定时任务”页签，支持按间隔、一次性、每日定时自动触发关键词采集。
-
-**涉及文件**：
-- `src/doubao2api/research_store.py`：新增 `research_schedules` 表及 CRUD 方法
-- `src/doubao2api/research_scheduler.py`：`_check_schedules()` 集成到调度循环
-- `src/doubao2api/native_dashboard.py` + `static/index.html`：定时任务页面
-- `src/doubao2api/models.py` + `server.py`：后端 API
-
-**详细任务**：
-
-1. **数据库表**（`research_store.py`）
-
-   新增表 `research_schedules`：
-
-   ```sql
-   CREATE TABLE IF NOT EXISTS research_schedules (
-       id TEXT PRIMARY KEY,
-       name TEXT NOT NULL,
-       enabled INTEGER NOT NULL DEFAULT 1,
-       schedule_type TEXT NOT NULL,          -- 'interval' | 'once' | 'daily'
-       schedule_value TEXT NOT NULL,         -- 秒数 / ISO 时间 / HH:MM
-       next_run_at TEXT NOT NULL,
-       keywords_json TEXT NOT NULL,
-       prompt_template TEXT NOT NULL,
-       account_ids_json TEXT NOT NULL,
-       max_attempts INTEGER NOT NULL,
-       interval_seconds INTEGER NOT NULL,    -- 同 research_jobs 的关键词间隔
-       account_cooldown_seconds INTEGER NOT NULL DEFAULT 0,
-       created_at TEXT NOT NULL,
-       updated_at TEXT NOT NULL,
-       last_run_at TEXT,
-       last_job_id TEXT,
-       run_count INTEGER NOT NULL DEFAULT 0,
-       last_error TEXT NOT NULL DEFAULT ''
-   );
-   CREATE INDEX IF NOT EXISTS idx_research_schedules_due
-   ON research_schedules(enabled, next_run_at);
-   ```
-
-   新增方法：
-   - `create_schedule(...)` / `list_schedules()` / `get_schedule(id)` / `update_schedule(...)`
-   - `toggle_schedule(id, enabled)` / `delete_schedule(id)`
-   - `due_schedules(limit=20)`：查询 `enabled=1 AND next_run_at <= now`。
-   - `create_job_from_schedule(schedule_id)`：使用 schedule 的参数调用现有 `create_job()`。
-   - `advance_schedule(schedule_id, job_id, next_run_at)`：更新 `last_run_at`、`last_job_id`、`run_count`、`next_run_at`。
-
-2. **下次执行时间计算**
-   - 新增辅助函数 `_compute_next_run(schedule_type, schedule_value, after=None)`：
-     - `interval`：每次执行后加 `schedule_value` 秒。
-     - `once`：执行一次后 `enabled=0`。
-     - `daily`：按 `HH:MM` 取下一个本地时间（当天或次日）。
-   - 非法值抛出 `ValueError`。
-
-3. **调度器集成**（`research_scheduler.py`）
-   - `_run_loop()` 在 `_dispatch_due_tasks()` 前调用 `await self._check_schedules()`。
-   - `_check_schedules()`：
-     1. 查询 `due_schedules`。
-     2. 对每个 schedule 调用 `create_job_from_schedule()`。
-     3. 调用 `advance_schedule()` 计算并保存下一次执行时间。
-     4. 调用 `self.wake()` 立即分发新任务。
-   - 顺序执行，避免并发冲突；禁用 schedule 不执行；过期 schedule 执行一次后按规则重新计算。
-
-4. **Native Dashboard 定时任务页面**（`native_dashboard.py`）
-   - `_build_ui()` 中“信源对比”后新增 `self.schedules_page = self._build_schedules_page()`，并 `addTab(..., "定时任务")`。
-   - `_build_schedules_page()` 包含：
-     - 表单区：名称、触发类型（间隔/每日/一次性）、参数、关键词输入/导入、提问模板、账号选择、最大尝试次数、关键词间隔。
-     - 列表区：schedule 卡片，显示名称、下次执行、上次执行、运行次数、启用/禁用、删除、立即执行。
-   - 新增 `create_schedule()`、`toggle_schedule()`、`delete_schedule()`、`run_schedule_now()`。
-
-5. **Web Dashboard 定时任务页面**（`static/index.html`）
-   - `<nav>` 中“信源对比”后新增 `<button class="tab" data-page="schedules">定时任务</button>`。
-   - 新增 `<main id="schedules">` 页面，结构与 Native 端类似。
-   - 新增前端函数调用 `/admin/api/research/schedules*`。
-
-6. **后端 API**（`models.py`、`server.py`）
-   - 新增模型：`ResearchScheduleCreateRequest`、`ResearchScheduleUpdateRequest`、`ResearchScheduleToggleRequest`。
-   - 新增端点：
-     - `POST /admin/api/research/schedules`
-     - `GET /admin/api/research/schedules`
-     - `GET /admin/api/research/schedules/{schedule_id}`
-     - `POST /admin/api/research/schedules/{schedule_id}/toggle`
-     - `DELETE /admin/api/research/schedules/{schedule_id}`
-     - `POST /admin/api/research/schedules/{schedule_id}/run`（立即执行一次）
-   - 校验：`prompt_template` 必须包含 `{keyword}`；keywords 非空；`max_attempts` 1-3。
-
----
-
-### Phase 5：性能优化专项
+### Phase 3：性能优化专项
 
 **目标**：降低 UI 刷新、账号快照、调度轮询和数据库访问的无效开销。
 
@@ -237,9 +133,8 @@
 
 | 层级 | 变更 |
 |------|------|
-| `Settings` (`config.py`) | 新增 `account_pinned: dict[str, bool]` |
-| `account_manager.py` | snapshot 返回 `pinned`；新增 `set_pinned` |
-| SQLite | 新增 `research_schedules` 表；新增 `idx_research_schedules_due`、`idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` |
+| `Settings` (`config.py`) | 新增 `account_pinned: dict[str, bool]`（账号置顶，尚未实现） |
+| SQLite | 新增 `research_job_templates` 表、`research_schedules` 表；新增 `idx_research_schedules_due`；计划新增 `idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` |
 
 ---
 
@@ -249,18 +144,25 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/admin/api/accounts/{account_id}/pin` | 设置账号置顶状态 |
-| POST | `/admin/api/research/schedules` | 创建定时任务 |
-| GET | `/admin/api/research/schedules` | 列表 |
-| GET | `/admin/api/research/schedules/{id}` | 详情 |
-| POST | `/admin/api/research/schedules/{id}/toggle` | 启用/禁用 |
+| POST | `/admin/api/accounts/{account_id}/pin` | 设置账号置顶状态（尚未实现） |
+| POST | `/admin/api/research/templates` | 创建任务模板 |
+| GET | `/admin/api/research/templates` | 任务模板列表 |
+| GET | `/admin/api/research/templates/{id}` | 任务模板详情 |
+| POST | `/admin/api/research/templates/{id}` | 更新任务模板 |
+| DELETE | `/admin/api/research/templates/{id}` | 删除任务模板（级联删除关联计划） |
+| POST | `/admin/api/research/schedules` | 创建触发计划 |
+| GET | `/admin/api/research/schedules` | 触发计划列表 |
+| GET | `/admin/api/research/schedules/{id}` | 触发计划详情 |
+| POST | `/admin/api/research/schedules/{id}` | 更新触发计划 |
+| POST | `/admin/api/research/schedules/{id}/toggle` | 启用/禁用计划 |
 | POST | `/admin/api/research/schedules/{id}/run` | 立即执行一次 |
-| DELETE | `/admin/api/research/schedules/{id}` | 删除 |
+| DELETE | `/admin/api/research/schedules/{id}` | 删除计划 |
 
 ### 新增 UI
 
-- **Native**：账号卡片置顶开关；新增“定时任务”内部页签。
-- **Web**：账号卡片置顶开关；新增“定时任务”页面。
+- **Native**：新增“定时任务”页签（任务模板管理 + 触发计划管理）。
+- **Web**：待新增“定时任务”页面。
+- **Native/Web**：账号置顶开关（尚未实现）。
 
 ---
 
@@ -271,23 +173,28 @@
 - `config.py`：`Settings` 序列化/反序列化 `account_pinned`；重命名/删除后字典同步。
 - `research_store.py`：
   - `interval` / `once` / `daily` 下次执行时间计算。
-  - `create_job_from_schedule` 生成的 job/tasks 与手动创建一致。
+  - 任务模板 CRUD 与级联删除。
+  - `create_job_from_schedule` 按模板最新配置生成 job/tasks。
+  - 触发计划启用/禁用、到期查询、推进下一次执行时间。
 - `desktop.py` / `account_manager.py`：置顶账号 tab 插入位置（dashboard 0，置顶 1）。
 
 ### 手动测试
+
+**定时任务**
+1. 创建任务模板。
+2. 创建 interval=60 秒计划引用该模板，1 分钟后自动生成并运行新 job。
+3. 修改模板关键词，确认下次触发使用新关键词。
+4. 创建一次性计划，确认准时触发并自动禁用。
+5. 创建 daily 计划，确认 `next_run_at` 为下一个 `HH:MM`。
+6. 禁用/删除计划，确认不再触发。
+7. 点击“立即执行”按钮，确认立即生成 job。
+8. 删除模板，确认关联计划被级联删除。
 
 **账号置顶**
 1. 创建多个账号，分别开启/关闭置顶。
 2. 关闭后重新打开账号，置顶账号出现在“采集管理中心”右侧第 1 位。
 3. 取消置顶后标签移到非置顶区末尾。
 4. 重命名/删除账号后置顶状态正确迁移/清除。
-
-**定时任务**
-1. 创建 interval=60 秒任务，1 分钟后自动生成并运行新 job。
-2. 创建一次性任务，确认准时触发。
-3. 创建 daily 任务，确认 `next_run_at` 为下一个 `HH:MM`。
-4. 禁用/删除 schedule，确认不再触发。
-5. 点击“立即执行”按钮，确认立即生成 job。
 
 **性能**
 1. 10 个以上账号时账号环境页刷新流畅。
@@ -300,8 +207,13 @@
 
 | 风险 | 缓解 |
 |------|------|
+| 定时任务触发后 job 创建失败但计划已推进 | `create_job_from_schedule` 成功后再 `advance_schedule`；异常时写入 `last_error` 不推进 |
+| 多个计划同时到期导致瞬间大量 job | 默认 `limit=20`，顺序执行 |
+| 程序重启后错过触发窗口 | `due_schedules` 查询 `next_run_at <= now`，重启后会立即补偿执行 |
+| 模板删除后关联计划被误删 | 外键 `ON DELETE CASCADE`；删除前 UI 二次确认 |
+| 修改模板影响已存在的计划 | 按需求设计为“按最新配置执行”；UI 明确提示 |
+| `daily` 跨夏令时边界 | 使用 `local_now()` 和 `datetime` 标准库自动处理 |
 | 多账号置顶 tab 顺序冲突 | 按 `discover_account_ids()` 顺序依次占 1、2、3… 位；取消置顶后移到非置顶区末尾 |
-| 定时任务重叠触发 | `_check_schedules()` 单线程顺序执行；先 create_job 再 advance_schedule |
 | 数据库连接线程安全 | `threading.local()` 保证每线程独立连接 |
 | 性能改动影响采集稳定性 | 先以 P0/P1 改动上线，保留旧值可回滚；充分手动测试 |
 | 老版本 settings.json | 未知字段自动忽略；新增 `account_pinned` 不影响旧版本 |
@@ -312,14 +224,14 @@
 ## 推荐实施顺序
 
 ```
-Phase 1（Web UI 对齐） → Phase 2（账号置顶） → Phase 3（定时任务） → Phase 4（性能专项）
+Phase 1（Web UI 对齐） → Phase 2（账号置顶） → Phase 3（性能专项）
 ```
 
 每完成一个 Phase，先跑全量测试并验收，再进入下一个。
 
-Phase 3/4/5 的内部顺序：
-1. **账号置顶**：配置层 → 账号池 → Desktop tab 管理 → Native UI → Web UI/API。
-2. **定时任务**：数据库表 → `ResearchStore` 方法 → `ResearchScheduler` 集成 → API → Native/Web UI。
+Phase 1/2/3 的内部顺序：
+1. **Web UI 对齐**：结果页可视化 → 长尾信源 → 定时任务页面 → 平台信息（可选）。
+2. **账号置顶**：配置层 → 账号池 → Desktop tab 管理 → Native UI → Web UI/API。
 3. **性能优化**：账号快照并发限制 → 动态调度休眠 → 数据库连接复用/索引 → UI 刷新频率 → 浏览器轮询优化。
 
 ---
@@ -329,11 +241,13 @@ Phase 3/4/5 的内部顺序：
 ```cmd
 cd /d "D:\ai-source-capturer\doubao-keyword-collector"
 python -m pytest tests/ -q
-doubao-keyword-collector
+python -m ruff check .
+python -m ruff format --check src/doubao2api tests
 ```
 
 ---
 
 ## 备注
 
-- `AI-UNDERSTANDING.md` 与 `UNDERSTANDING.md` 已随本次改动更新；后续随 Phase 1/2 完成后继续补充“长尾信源分析”等内容。
+- `AI-UNDERSTANDING.md` 与 `UNDERSTANDING.md` 已随本次改动更新；后续随 Phase 1/2 完成后继续补充。
+- 定时任务采用“任务模板 + 触发计划”两层模型：模板保存采集配置（不保存账号），计划保存触发规则并引用模板；计划触发时按模板最新配置生成一次性 `research_jobs`，账号由调度器按现有 LRU 逻辑动态选择。

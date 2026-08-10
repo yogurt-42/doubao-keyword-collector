@@ -69,7 +69,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 | 文件 | 一句话职责 | 改动它会影响哪里 |
 |------|-----------|------------------|
-| `native_dashboard.py` | 桌面端 6 页签 UI | 所有界面交互 |
+| `native_dashboard.py` | 桌面端 8 页签 UI | 所有界面交互 |
 | `desktop.py` | Qt 主窗口与账号标签管理 | 账号页签生命周期 |
 | `account_manager.py` | 账号池创建/启动/快照/重命名/删除 | 账号环境页 |
 | `research_scheduler.py` | 调度关键词任务、处理风控/重试 | 新建采集、任务执行 |
@@ -96,6 +96,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 | 长尾信源 | 按频次/广度/密度识别垂直长尾宝藏平台，气泡四象限图可视化，支持悬停、导出 Excel | `analyze_long_tail()` / `LongTailChart` |
 | 信源对比 | A/B 两个日期区间对比平台变化 | `refresh_source_comparison()` |
 | 平台信息 | 查看当前平台规则库，导入 Excel 扩展 | `refresh_platforms()` / `platform_editor.add_entries()` |
+| 定时任务 | 任务模板 + 触发计划两层模型，支持按间隔/一次性/每日定时自动生成采集任务 | `refresh_schedules_page()` / `save_job_template()` / `create_schedule()` |
 
 ---
 
@@ -107,8 +108,8 @@ D:\ai-source-capturer\doubao-keyword-collector
 | `research_tasks` | 每个关键词一次执行 | `job_id`, `keyword`, `status`, `scheduled_at`, `account_id`, `attempt_count`, `result_count` |
 | `research_results` | 采集到的链接 | `job_id`, `task_id`, `keyword`, `link`, `platform`, `platform_type`, `account_id`, `collected_at/date`, `title` |
 | `account_runtime` | 账号使用/暂停状态 | `last_used_at`, `paused_until`, `pause_reason` |
-
-未来计划新增：`research_schedules`（定时任务）。
+| `research_job_templates` | 任务模板（关键词、提问模板、间隔、尝试次数等） | `name`, `keywords_json`, `prompt_template`, `interval_seconds`, `account_cooldown_seconds`, `max_attempts` |
+| `research_schedules` | 触发计划（引用模板，按间隔/一次性/每日定时触发） | `name`, `template_id`, `enabled`, `schedule_type`, `schedule_value`, `next_run_at`, `run_count`, `last_job_id` |
 
 ---
 
@@ -129,6 +130,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 - 历史任务标题栏新增“同步平台信息”按钮，按最新规则回填缺失的平台类型。
 - 结果页切换任务卡死问题已修复（临时切换 `ResizeMode` + `blockSignals`）。
 - 新增“长尾信源”独立页签：按频次/广度/密度识别垂直长尾宝藏平台，支持气泡四象限图、悬停查看、Excel 导出。
+- 新增“定时任务”页签：采用任务模板 + 触发计划两层模型，支持按间隔、一次性、每日定时自动生成采集任务。
 
 ---
 
@@ -136,11 +138,10 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | 平台类型改造、平台信息管理、信源分布、信源对比、账号暂停/恢复、历史任务导出/重命名/同步平台信息、长尾信源分析 |
-| ⏳ Phase 1 | Web UI 与 Native 对齐（历史任务、信源对比、平台信息、长尾信源、图表） |
+| ✅ 已完成 | 平台类型改造、平台信息管理、信源分布、信源对比、账号暂停/恢复、历史任务导出/重命名/同步平台信息、长尾信源分析、定时任务（Native） |
+| ⏳ Phase 1 | Web UI 与 Native 对齐（历史任务、信源对比、平台信息、长尾信源、图表、定时任务） |
 | ⏳ Phase 2 | 账号置顶 |
-| ⏳ Phase 3 | 定时任务 |
-| ⏳ Phase 4 | 性能优化专项 |
+| ⏳ Phase 3 | 性能优化专项 |
 
 ---
 

@@ -36,6 +36,44 @@ def normalize_datetime(value: str | None) -> str:
     return parsed.isoformat(timespec="seconds")
 
 
+def _compute_next_run(
+    schedule_type: str,
+    schedule_value: str,
+    after: datetime | None = None,
+) -> str:
+    """Compute the next run time for a schedule.
+
+    - interval: schedule_value is seconds as integer string.
+    - once: schedule_value is an ISO datetime string.
+    - daily: schedule_value is "HH:MM" in local time.
+    """
+    after = after or local_now()
+    if schedule_type == "interval":
+        try:
+            seconds = int(schedule_value)
+        except ValueError as exc:
+            raise ValueError("间隔秒数必须是整数") from exc
+        if seconds <= 0:
+            raise ValueError("间隔秒数必须大于 0")
+        return (after + timedelta(seconds=seconds)).isoformat(timespec="seconds")
+    if schedule_type == "once":
+        return normalize_datetime(schedule_value)
+    if schedule_type == "daily":
+        try:
+            hour_str, minute_str = schedule_value.split(":")
+            hour = int(hour_str)
+            minute = int(minute_str)
+        except ValueError as exc:
+            raise ValueError("每日时间格式必须是 HH:MM") from exc
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError("每日时间超出有效范围")
+        candidate = after.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= after:
+            candidate += timedelta(days=1)
+        return candidate.isoformat(timespec="seconds")
+    raise ValueError(f"不支持的触发类型: {schedule_type}")
+
+
 class ResearchStore:
     def __init__(self, path: Path) -> None:
         self.path = path.resolve()
@@ -117,6 +155,35 @@ class ResearchStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_account_runtime_paused
                 ON account_runtime(paused_until);
+                CREATE TABLE IF NOT EXISTS research_job_templates (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    keywords_json TEXT NOT NULL,
+                    prompt_template TEXT NOT NULL,
+                    interval_seconds INTEGER NOT NULL,
+                    account_cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS research_schedules (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    template_id TEXT NOT NULL
+                        REFERENCES research_job_templates(id) ON DELETE CASCADE,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    schedule_type TEXT NOT NULL,
+                    schedule_value TEXT NOT NULL,
+                    next_run_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_run_at TEXT,
+                    last_job_id TEXT,
+                    run_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_research_schedules_due
+                ON research_schedules(enabled, next_run_at);
                 """
             )
             connection.execute(
@@ -610,6 +677,333 @@ class ResearchStore:
                     error = '程序上次退出时任务仍在运行，已恢复排队'
                 WHERE status = 'running'
                 """
+            )
+
+    # ------------------------------------------------------------------
+    # Job templates for scheduled research
+    # ------------------------------------------------------------------
+
+    def _validate_job_template_inputs(
+        self,
+        keywords: list[str],
+        prompt_template: str,
+        max_attempts: int,
+    ) -> list[str]:
+        normalized = [keyword.strip() for keyword in keywords if keyword.strip()]
+        if not normalized:
+            raise ValueError("请至少填写一个关键词")
+        if "{keyword}" not in prompt_template:
+            raise ValueError("提问模板必须包含 {keyword} 占位符")
+        if not 1 <= max_attempts <= 3:
+            raise ValueError("最多尝试次数必须在 1 到 3 之间")
+        return normalized
+
+    def _job_template_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["keywords"] = json.loads(item.pop("keywords_json"))
+        return item
+
+    def create_job_template(
+        self,
+        *,
+        name: str,
+        keywords: list[str],
+        prompt_template: str,
+        interval_seconds: int,
+        account_cooldown_seconds: int,
+        max_attempts: int,
+    ) -> dict[str, Any]:
+        normalized = self._validate_job_template_inputs(keywords, prompt_template, max_attempts)
+        template_id = uuid.uuid4().hex
+        created_at = iso_now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO research_job_templates (
+                    id, name, keywords_json, prompt_template, interval_seconds,
+                    account_cooldown_seconds, max_attempts, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    template_id,
+                    name.strip() or f"任务模板 {created_at[:10]}",
+                    json.dumps(normalized, ensure_ascii=False),
+                    prompt_template,
+                    interval_seconds,
+                    account_cooldown_seconds,
+                    max_attempts,
+                    created_at,
+                    created_at,
+                ),
+            )
+        return self.get_job_template(template_id)
+
+    def list_job_templates(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM research_job_templates ORDER BY updated_at DESC"
+            ).fetchall()
+        return [self._job_template_row(row) for row in rows]
+
+    def get_job_template(self, template_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM research_job_templates WHERE id = ?", (template_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(template_id)
+        return self._job_template_row(row)
+
+    def update_job_template(
+        self,
+        template_id: str,
+        *,
+        name: str,
+        keywords: list[str],
+        prompt_template: str,
+        interval_seconds: int,
+        account_cooldown_seconds: int,
+        max_attempts: int,
+    ) -> dict[str, Any]:
+        normalized = self._validate_job_template_inputs(keywords, prompt_template, max_attempts)
+        updated_at = iso_now()
+        with self._connect() as connection:
+            result = connection.execute(
+                """
+                UPDATE research_job_templates SET
+                    name = ?,
+                    keywords_json = ?,
+                    prompt_template = ?,
+                    interval_seconds = ?,
+                    account_cooldown_seconds = ?,
+                    max_attempts = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    name.strip() or f"任务模板 {updated_at[:10]}",
+                    json.dumps(normalized, ensure_ascii=False),
+                    prompt_template,
+                    interval_seconds,
+                    account_cooldown_seconds,
+                    max_attempts,
+                    updated_at,
+                    template_id,
+                ),
+            )
+            if result.rowcount == 0:
+                raise KeyError(template_id)
+        return self.get_job_template(template_id)
+
+    def delete_job_template(self, template_id: str) -> None:
+        with self._connect() as connection:
+            result = connection.execute(
+                "DELETE FROM research_job_templates WHERE id = ?", (template_id,)
+            )
+            if result.rowcount == 0:
+                raise KeyError(template_id)
+
+    # ------------------------------------------------------------------
+    # Research schedules
+    # ------------------------------------------------------------------
+
+    def _schedule_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["keywords"] = json.loads(item.pop("keywords_json"))
+        return item
+
+    def create_schedule(
+        self,
+        *,
+        name: str,
+        template_id: str,
+        schedule_type: str,
+        schedule_value: str,
+    ) -> dict[str, Any]:
+        if schedule_type not in ("interval", "once", "daily"):
+            raise ValueError("触发类型必须是 interval、once 或 daily")
+        next_run_at = _compute_next_run(schedule_type, schedule_value)
+        # Verify template exists before creating the schedule.
+        self.get_job_template(template_id)
+        schedule_id = uuid.uuid4().hex
+        created_at = iso_now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO research_schedules (
+                    id, name, template_id, enabled, schedule_type, schedule_value,
+                    next_run_at, created_at, updated_at
+                ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
+                """,
+                (
+                    schedule_id,
+                    name.strip() or f"定时计划 {created_at[:10]}",
+                    template_id,
+                    schedule_type,
+                    schedule_value,
+                    next_run_at,
+                    created_at,
+                    created_at,
+                ),
+            )
+        return self.get_schedule(schedule_id)
+
+    def list_schedules(self) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.*, t.name AS template_name, t.keywords_json
+                FROM research_schedules s
+                JOIN research_job_templates t ON t.id = s.template_id
+                ORDER BY s.enabled DESC, s.next_run_at ASC
+                """
+            ).fetchall()
+        return [self._schedule_row(row) for row in rows]
+
+    def get_schedule(self, schedule_id: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT s.*, t.name AS template_name, t.keywords_json
+                FROM research_schedules s
+                JOIN research_job_templates t ON t.id = s.template_id
+                WHERE s.id = ?
+                """,
+                (schedule_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(schedule_id)
+        return self._schedule_row(row)
+
+    def update_schedule(
+        self,
+        schedule_id: str,
+        *,
+        name: str,
+        template_id: str,
+        schedule_type: str,
+        schedule_value: str,
+    ) -> dict[str, Any]:
+        if schedule_type not in ("interval", "once", "daily"):
+            raise ValueError("触发类型必须是 interval、once 或 daily")
+        next_run_at = _compute_next_run(schedule_type, schedule_value)
+        self.get_job_template(template_id)
+        updated_at = iso_now()
+        with self._connect() as connection:
+            result = connection.execute(
+                """
+                UPDATE research_schedules SET
+                    name = ?,
+                    template_id = ?,
+                    schedule_type = ?,
+                    schedule_value = ?,
+                    next_run_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    name.strip() or f"定时计划 {updated_at[:10]}",
+                    template_id,
+                    schedule_type,
+                    schedule_value,
+                    next_run_at,
+                    updated_at,
+                    schedule_id,
+                ),
+            )
+            if result.rowcount == 0:
+                raise KeyError(schedule_id)
+        return self.get_schedule(schedule_id)
+
+    def toggle_schedule(self, schedule_id: str, enabled: bool) -> dict[str, Any]:
+        updated_at = iso_now()
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT schedule_type, schedule_value, next_run_at, enabled
+                FROM research_schedules WHERE id = ?
+                """,
+                (schedule_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(schedule_id)
+            next_run_at = row["next_run_at"]
+            # If re-enabling and the old next_run_at has passed, recompute.
+            if enabled and not row["enabled"] and next_run_at <= updated_at:
+                next_run_at = _compute_next_run(row["schedule_type"], row["schedule_value"])
+            connection.execute(
+                """
+                UPDATE research_schedules
+                SET enabled = ?, next_run_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (1 if enabled else 0, next_run_at, updated_at, schedule_id),
+            )
+        return self.get_schedule(schedule_id)
+
+    def delete_schedule(self, schedule_id: str) -> None:
+        with self._connect() as connection:
+            result = connection.execute(
+                "DELETE FROM research_schedules WHERE id = ?", (schedule_id,)
+            )
+            if result.rowcount == 0:
+                raise KeyError(schedule_id)
+
+    def due_schedules(self, limit: int = 20) -> list[dict[str, Any]]:
+        now = iso_now()
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.*, t.name AS template_name, t.keywords_json
+                FROM research_schedules s
+                JOIN research_job_templates t ON t.id = s.template_id
+                WHERE s.enabled = 1 AND s.next_run_at <= ?
+                ORDER BY s.next_run_at ASC LIMIT ?
+                """,
+                (now, limit),
+            ).fetchall()
+        return [self._schedule_row(row) for row in rows]
+
+    def create_job_from_schedule(self, schedule_id: str) -> dict[str, Any]:
+        schedule = self.get_schedule(schedule_id)
+        template = self.get_job_template(schedule["template_id"])
+        return self.create_job(
+            name=f"{schedule['name']} - {iso_now()}",
+            keywords=template["keywords"],
+            account_ids=[],  # 由调度器按现有 LRU 逻辑动态选择账号
+            prompt_template=template["prompt_template"],
+            scheduled_at=iso_now(),
+            interval_seconds=template["interval_seconds"],
+            account_cooldown_seconds=template["account_cooldown_seconds"],
+            max_attempts=template["max_attempts"],
+        )
+
+    def advance_schedule(self, schedule_id: str, job_id: str, next_run_at: str) -> None:
+        updated_at = iso_now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE research_schedules SET
+                    last_run_at = ?,
+                    last_job_id = ?,
+                    run_count = run_count + 1,
+                    next_run_at = ?,
+                    updated_at = ?,
+                    last_error = ''
+                WHERE id = ?
+                """,
+                (updated_at, job_id, next_run_at, updated_at, schedule_id),
+            )
+
+    def update_schedule_error(self, schedule_id: str, error: str) -> None:
+        updated_at = iso_now()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE research_schedules SET last_error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (error[:500], updated_at, schedule_id),
             )
 
     def account_runtime(self, account_id: str) -> dict[str, Any]:

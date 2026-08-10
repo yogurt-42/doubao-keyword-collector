@@ -33,6 +33,11 @@ from .models import (
     ImageGenerationRequest,
     ManualCookieImportRequest,
     ResearchJobCreateRequest,
+    ResearchJobTemplateCreateRequest,
+    ResearchJobTemplateUpdateRequest,
+    ResearchScheduleCreateRequest,
+    ResearchScheduleToggleRequest,
+    ResearchScheduleUpdateRequest,
     VideoGenerationRequest,
 )
 from .research_export import build_results_workbook
@@ -553,6 +558,160 @@ def create_app(
             return result
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="采集任务不存在") from exc
+
+    # ------------------------------------------------------------------
+    # Research job templates
+    # ------------------------------------------------------------------
+
+    @app.post("/admin/api/research/templates")
+    async def admin_create_research_job_template(
+        body: ResearchJobTemplateCreateRequest,
+    ) -> dict[str, Any]:
+        keywords = normalize_keywords(body.keywords)
+        if not keywords:
+            raise HTTPException(status_code=400, detail="请至少填写一个关键词")
+        if "{keyword}" not in body.prompt_template:
+            raise HTTPException(status_code=400, detail="提问模板必须包含 {keyword} 占位符")
+        try:
+            return research_store.create_job_template(
+                name=body.name,
+                keywords=keywords,
+                prompt_template=body.prompt_template,
+                interval_seconds=body.interval_seconds,
+                account_cooldown_seconds=body.account_cooldown_seconds,
+                max_attempts=body.max_attempts,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/admin/api/research/templates")
+    async def admin_list_research_job_templates() -> dict[str, Any]:
+        return {"templates": research_store.list_job_templates()}
+
+    @app.get("/admin/api/research/templates/{template_id}")
+    async def admin_get_research_job_template(template_id: str) -> dict[str, Any]:
+        try:
+            return research_store.get_job_template(template_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="任务模板不存在") from exc
+
+    @app.post("/admin/api/research/templates/{template_id}")
+    async def admin_update_research_job_template(
+        template_id: str,
+        body: ResearchJobTemplateUpdateRequest,
+    ) -> dict[str, Any]:
+        keywords = normalize_keywords(body.keywords)
+        if not keywords:
+            raise HTTPException(status_code=400, detail="请至少填写一个关键词")
+        if "{keyword}" not in body.prompt_template:
+            raise HTTPException(status_code=400, detail="提问模板必须包含 {keyword} 占位符")
+        try:
+            return research_store.update_job_template(
+                template_id,
+                name=body.name,
+                keywords=keywords,
+                prompt_template=body.prompt_template,
+                interval_seconds=body.interval_seconds,
+                account_cooldown_seconds=body.account_cooldown_seconds,
+                max_attempts=body.max_attempts,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="任务模板不存在") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/admin/api/research/templates/{template_id}")
+    async def admin_delete_research_job_template(template_id: str) -> dict[str, Any]:
+        try:
+            research_store.delete_job_template(template_id)
+            return {"deleted": True}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="任务模板不存在") from exc
+
+    # ------------------------------------------------------------------
+    # Research schedules
+    # ------------------------------------------------------------------
+
+    @app.post("/admin/api/research/schedules")
+    async def admin_create_research_schedule(
+        body: ResearchScheduleCreateRequest,
+    ) -> dict[str, Any]:
+        if body.schedule_type not in ("interval", "once", "daily"):
+            raise HTTPException(status_code=400, detail="触发类型必须是 interval、once 或 daily")
+        try:
+            return research_store.create_schedule(
+                name=body.name,
+                template_id=body.template_id,
+                schedule_type=body.schedule_type,
+                schedule_value=body.schedule_value,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="任务模板不存在") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/admin/api/research/schedules")
+    async def admin_list_research_schedules() -> dict[str, Any]:
+        return {
+            "schedules": research_store.list_schedules(),
+            "templates": research_store.list_job_templates(),
+        }
+
+    @app.get("/admin/api/research/schedules/{schedule_id}")
+    async def admin_get_research_schedule(schedule_id: str) -> dict[str, Any]:
+        try:
+            return research_store.get_schedule(schedule_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="定时计划不存在") from exc
+
+    @app.post("/admin/api/research/schedules/{schedule_id}")
+    async def admin_update_research_schedule(
+        schedule_id: str,
+        body: ResearchScheduleUpdateRequest,
+    ) -> dict[str, Any]:
+        if body.schedule_type not in ("interval", "once", "daily"):
+            raise HTTPException(status_code=400, detail="触发类型必须是 interval、once 或 daily")
+        try:
+            return research_store.update_schedule(
+                schedule_id,
+                name=body.name,
+                template_id=body.template_id,
+                schedule_type=body.schedule_type,
+                schedule_value=body.schedule_value,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="定时计划或任务模板不存在") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/admin/api/research/schedules/{schedule_id}/toggle")
+    async def admin_toggle_research_schedule(
+        schedule_id: str,
+        body: ResearchScheduleToggleRequest,
+    ) -> dict[str, Any]:
+        try:
+            return research_store.toggle_schedule(schedule_id, body.enabled)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="定时计划不存在") from exc
+
+    @app.delete("/admin/api/research/schedules/{schedule_id}")
+    async def admin_delete_research_schedule(schedule_id: str) -> dict[str, Any]:
+        try:
+            research_store.delete_schedule(schedule_id)
+            return {"deleted": True}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="定时计划不存在") from exc
+
+    @app.post("/admin/api/research/schedules/{schedule_id}/run")
+    async def admin_run_research_schedule_now(schedule_id: str) -> dict[str, Any]:
+        try:
+            job = research_store.create_job_from_schedule(schedule_id)
+            research_scheduler.wake()
+            return job
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="定时计划不存在") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/admin/api/research/results")
     async def admin_research_results(

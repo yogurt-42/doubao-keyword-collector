@@ -146,7 +146,7 @@ D:\ai-source-capturer\doubao-keyword-collector
     - 调用 `account.client.chat(..., reference_callback=save_reference)`。
     - 异常时根据类型暂停账号或重试任务。
   - 账号选择逻辑：跳过 `busy_accounts`、跳过 `paused_until` 未到期的账号、检测登录/验证码/聊天就绪状态。
-  - 预留 `_check_schedules()` 接口，用于未来定时任务（`research_schedules` 表）。
+  - `_check_schedules()`：在 `_dispatch_due_tasks()` 之前检查到期的 `research_schedules`，按模板最新配置生成一次性 `research_jobs` 并推进下一次执行时间。
 
 ### 5.5 数据层：`research_store.py`
 
@@ -158,10 +158,14 @@ D:\ai-source-capturer\doubao-keyword-collector
     - `research_tasks`：每个关键词一次执行（job_id、keyword、status、scheduled_at、account_id、attempt_count、result_count）。
     - `research_results`：采集到的每条链接（job_id、task_id、keyword、link、platform、platform_type、account_id、collected_at/date、title）。
     - `account_runtime`：账号使用/暂停状态。
+    - `research_job_templates`：任务模板（name、keywords_json、prompt_template、interval_seconds、account_cooldown_seconds、max_attempts）。
+    - `research_schedules`：触发计划（name、template_id、enabled、schedule_type、schedule_value、next_run_at、run_count、last_job_id）。
   - 核心方法：
     - `create_job()` / `list_jobs()` / `get_job()` / `set_job_status()` / `rename_job()` / `delete_job()`。
     - `due_tasks()` / `mark_task_running()` / `complete_task()` / `fail_or_retry_task()`。
     - `add_result()`：实时写入单条链接。
+    - 任务模板：`create_job_template()` / `list_job_templates()` / `get_job_template()` / `update_job_template()` / `delete_job_template()`。
+    - 触发计划：`create_schedule()` / `list_schedules()` / `get_schedule()` / `update_schedule()` / `toggle_schedule()` / `delete_schedule()` / `due_schedules()` / `create_job_from_schedule()` / `advance_schedule()`。
     - `result_dashboard()` / `source_comparison()` / `list_results()`：筛选与聚合。
     - `sync_platform_info()`：按最新规则回填缺失的 `platform_type`。
     - `long_tail_analysis()`：按平台聚合频次、关键词覆盖广度、密度，返回四象限分类与代表性链接/域名。
@@ -247,13 +251,15 @@ D:\ai-source-capturer\doubao-keyword-collector
 ### 5.13 管理界面：`native_dashboard.py`
 
 - `NativeDashboard`
-  - 内部 `QTabWidget` 包含 7 个页签：新建采集、账号环境、历史任务、采集结果、长尾信源、信源对比、平台信息。
+  - 内部 `QTabWidget` 包含 8 个页签：新建采集、账号环境、历史任务、采集结果、长尾信源、信源对比、平台信息、定时任务。
   - `DesktopBackend` 提供账号池、调度器、数据存储。
   - 3 秒定时刷新 + 5 秒结果/对比刷新。
   - 关键方法：
-    - `_build_tasks_page()` / `_build_accounts_page()` / `_build_history_page()` / `_build_results_page()` / `_build_long_tail_page()` / `_build_comparison_page()` / `_build_platforms_page()`。
-    - `refresh_accounts()` / `refresh_jobs()` / `refresh_history()` / `refresh_results()` / `refresh_long_tail_options()` / `refresh_source_comparison()` / `refresh_platforms()`。
+    - `_build_tasks_page()` / `_build_accounts_page()` / `_build_history_page()` / `_build_results_page()` / `_build_long_tail_page()` / `_build_comparison_page()` / `_build_platforms_page()` / `_build_schedules_page()`。
+    - `refresh_accounts()` / `refresh_jobs()` / `refresh_history()` / `refresh_results()` / `refresh_long_tail_options()` / `refresh_source_comparison()` / `refresh_platforms()` / `refresh_schedules_page()`。
     - `create_job()`：读取表单 → `research_store.create_job()` → `scheduler.wake()`。
+    - `save_job_template()` / `edit_job_template()` / `delete_job_template()`：任务模板 CRUD。
+    - `create_schedule()` / `toggle_schedule()` / `delete_schedule()` / `run_schedule_now()`：触发计划管理。
     - `analyze_long_tail()`：按筛选范围和阈值计算四象限并渲染 matplotlib 气泡图。
     - `export_job_results()`：历史任务行内导出 Excel。
     - `rename_job()`：历史任务重命名。

@@ -858,6 +858,8 @@ class NativeDashboard(QWidget):
         self.results_focus_mode = False
         self._window_was_maximized = False
         self._window_was_fullscreen = False
+        self.editing_template_id: str | None = None
+        self.refreshing_schedules = False
         self._build_ui()
         self._apply_style()
         self.escape_shortcut = QShortcut(QKeySequence("Esc"), self)
@@ -957,6 +959,7 @@ class NativeDashboard(QWidget):
         self.results_page = self._build_results_page()
         self.long_tail_page = self._build_long_tail_page()
         self.comparison_page = self._build_comparison_page()
+        self.schedules_page = self._build_schedules_page()
         self.platforms_page = self._build_platforms_page()
         self.sections.addTab(self.tasks_page, "新建采集")
         self.sections.addTab(self.accounts_page, "账号环境")
@@ -964,6 +967,7 @@ class NativeDashboard(QWidget):
         self.sections.addTab(self.results_page, "采集结果")
         self.sections.addTab(self.long_tail_page, "长尾信源")
         self.sections.addTab(self.comparison_page, "信源对比")
+        self.sections.addTab(self.schedules_page, "定时任务")
         self.sections.addTab(self.platforms_page, "平台信息")
         self.sections.currentChanged.connect(self._on_section_changed)
         root.addWidget(self.sections, 1)
@@ -1612,6 +1616,179 @@ class NativeDashboard(QWidget):
         layout.addWidget(self.platform_info_table, 1)
         return page
 
+    def _build_schedules_page(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        content.setMinimumWidth(900)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 8, 4, 4)
+        layout.setSpacing(14)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        intro = QLabel(
+            "先创建任务模板，再基于模板创建定时计划。计划触发时会按模板的最新配置自动生成采集任务。"
+        )
+        intro.setObjectName("workflowBanner")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        # ------------------- 任务模板 -------------------
+        templates_group = QGroupBox("任务模板")
+        templates_layout = QVBoxLayout(templates_group)
+        templates_layout.setSpacing(12)
+
+        template_form = QGridLayout()
+        template_form.setSpacing(10)
+        template_form.addWidget(QLabel("模板名称"), 0, 0)
+        self.template_name = QLineEdit()
+        self.template_name.setPlaceholderText("例如：每日品牌词调研")
+        template_form.addWidget(self.template_name, 0, 1, 1, 3)
+
+        template_form.addWidget(QLabel("关键词"), 1, 0, Qt.AlignmentFlag.AlignTop)
+        self.template_keywords = QTextEdit()
+        self.template_keywords.setPlaceholderText("每行一个关键词")
+        self.template_keywords.setMinimumHeight(80)
+        self.template_keywords.setMaximumHeight(120)
+        template_form.addWidget(self.template_keywords, 1, 1, 1, 3)
+
+        template_form.addWidget(QLabel("提问模板"), 2, 0)
+        self.template_prompt_template = QLineEdit(DEFAULT_PROMPT)
+        self.template_prompt_template.setPlaceholderText("{keyword}")
+        template_form.addWidget(self.template_prompt_template, 2, 1, 1, 3)
+
+        template_form.addWidget(QLabel("关键词间隔"), 3, 0)
+        self.template_interval_seconds = QSpinBox()
+        self.template_interval_seconds.setRange(1, 86400)
+        self.template_interval_seconds.setValue(10)
+        self.template_interval_seconds.setSuffix(" 秒")
+        template_form.addWidget(self.template_interval_seconds, 3, 1)
+
+        template_form.addWidget(QLabel("账号冷却"), 3, 2)
+        self.template_account_cooldown_seconds = QSpinBox()
+        self.template_account_cooldown_seconds.setRange(0, 86400)
+        self.template_account_cooldown_seconds.setValue(0)
+        self.template_account_cooldown_seconds.setSuffix(" 秒")
+        template_form.addWidget(self.template_account_cooldown_seconds, 3, 3)
+
+        template_form.addWidget(QLabel("最多尝试"), 4, 0)
+        self.template_max_attempts = QSpinBox()
+        self.template_max_attempts.setRange(1, 3)
+        self.template_max_attempts.setValue(2)
+        template_form.addWidget(self.template_max_attempts, 4, 1)
+        templates_layout.addLayout(template_form)
+
+        template_buttons = QHBoxLayout()
+        template_buttons.addStretch()
+        self.template_cancel_button = QPushButton("取消")
+        self.template_cancel_button.setObjectName("secondaryButton")
+        self.template_cancel_button.clicked.connect(self._reset_template_form)
+        self.template_save_button = QPushButton("保存模板")
+        self.template_save_button.setObjectName("primaryButton")
+        self.template_save_button.clicked.connect(self.save_job_template)
+        template_buttons.addWidget(self.template_cancel_button)
+        template_buttons.addWidget(self.template_save_button)
+        templates_layout.addLayout(template_buttons)
+
+        self.templates_table = QTableWidget(0, 5)
+        self.templates_table.setHorizontalHeaderLabels(
+            ["名称", "关键词数", "提问模板", "编辑", "删除"]
+        )
+        self._configure_table(self.templates_table)
+        self.templates_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.templates_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
+        )
+        self.templates_table.verticalHeader().setDefaultSectionSize(40)
+        templates_layout.addWidget(self.templates_table, 1)
+
+        layout.addWidget(templates_group)
+
+        # ------------------- 触发计划 -------------------
+        schedules_group = QGroupBox("触发计划")
+        schedules_layout = QVBoxLayout(schedules_group)
+        schedules_layout.setSpacing(12)
+
+        schedule_form = QGridLayout()
+        schedule_form.setSpacing(10)
+        schedule_form.addWidget(QLabel("计划名称"), 0, 0)
+        self.schedule_name = QLineEdit()
+        self.schedule_name.setPlaceholderText("例如：每天早上 9 点执行")
+        schedule_form.addWidget(self.schedule_name, 0, 1, 1, 3)
+
+        schedule_form.addWidget(QLabel("选择模板"), 1, 0)
+        self.schedule_template_id = QComboBox()
+        schedule_form.addWidget(self.schedule_template_id, 1, 1, 1, 3)
+
+        schedule_form.addWidget(QLabel("触发类型"), 2, 0)
+        self.schedule_type = QComboBox()
+        self.schedule_type.addItem("按间隔", "interval")
+        self.schedule_type.addItem("一次性", "once")
+        self.schedule_type.addItem("每日定时", "daily")
+        self.schedule_type.currentIndexChanged.connect(self._on_schedule_type_changed)
+        schedule_form.addWidget(self.schedule_type, 2, 1)
+
+        schedule_form.addWidget(QLabel("触发参数"), 2, 2)
+        self.schedule_value = QLineEdit()
+        self.schedule_value.setPlaceholderText("秒数，例如 3600")
+        schedule_form.addWidget(self.schedule_value, 2, 3)
+        schedules_layout.addLayout(schedule_form)
+
+        schedule_buttons = QHBoxLayout()
+        schedule_buttons.addStretch()
+        create_schedule_button = QPushButton("创建计划")
+        create_schedule_button.setObjectName("primaryButton")
+        create_schedule_button.clicked.connect(self.create_schedule)
+        schedule_buttons.addWidget(create_schedule_button)
+        schedules_layout.addLayout(schedule_buttons)
+
+        self.schedules_table = QTableWidget(0, 8)
+        self.schedules_table.setHorizontalHeaderLabels(
+            ["名称", "关联模板", "触发类型", "触发参数", "下次执行", "运行次数", "启用", "操作"]
+        )
+        self._configure_table(self.schedules_table)
+        self.schedules_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.schedules_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.schedules_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.Stretch
+        )
+        self.schedules_table.verticalHeader().setDefaultSectionSize(40)
+        schedules_layout.addWidget(self.schedules_table, 1)
+
+        layout.addWidget(schedules_group)
+        layout.addStretch()
+        return page
+
+    def _on_schedule_type_changed(self, index: int) -> None:
+        schedule_type = self.schedule_type.itemData(index)
+        placeholders = {
+            "interval": "秒数，例如 3600",
+            "once": "ISO 时间，例如 2026-08-10T09:00:00",
+            "daily": "HH:MM，例如 09:00",
+        }
+        self.schedule_value.setPlaceholderText(placeholders.get(schedule_type, ""))
+
+    def _reset_template_form(self) -> None:
+        self.editing_template_id = None
+        self.template_name.clear()
+        self.template_keywords.clear()
+        self.template_prompt_template.setText(DEFAULT_PROMPT)
+        self.template_interval_seconds.setValue(10)
+        self.template_account_cooldown_seconds.setValue(0)
+        self.template_max_attempts.setValue(2)
+        self.template_save_button.setText("保存模板")
+
     def _update_combo(
         self,
         combo: QComboBox,
@@ -2212,6 +2389,8 @@ class NativeDashboard(QWidget):
             self.refresh_accounts()
         elif current is self.history_page:
             self.refresh_history()
+        elif current is self.schedules_page:
+            self.refresh_schedules_page()
         elif current is self.platforms_page:
             self.refresh_platforms()
 
@@ -2249,6 +2428,248 @@ class NativeDashboard(QWidget):
             )
 
         self._watch(future, apply, label="刷新长尾选项", silent=True)
+
+    def refresh_schedules_page(self) -> None:
+        if self.refreshing_schedules:
+            return
+        self.refreshing_schedules = True
+
+        def load() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+            return (
+                self.backend.research_store.list_job_templates(),
+                self.backend.research_store.list_schedules(),
+            )
+
+        future = self.backend.call(load)
+
+        def apply(payload: tuple[list[dict[str, Any]], list[dict[str, Any]]]) -> None:
+            self.refreshing_schedules = False
+            templates, schedules = payload
+            self._refresh_templates_table(templates)
+            self._refresh_schedules_table(schedules)
+            self._update_combo(
+                self.schedule_template_id,
+                [(t["name"], t["id"]) for t in templates],
+                "请选择模板",
+            )
+
+        def on_error(exc: BaseException) -> None:
+            self.refreshing_schedules = False
+            self.engine_badge.setText("● 定时任务刷新失败")
+            self.engine_badge.setToolTip(str(exc))
+
+        self._watch(future, apply, error_callback=on_error, label="刷新定时任务", silent=True)
+
+    def _refresh_templates_table(self, templates: list[dict[str, Any]]) -> None:
+        table = self.templates_table
+        table.setRowCount(len(templates))
+        for row, template in enumerate(templates):
+            table.setItem(row, 0, QTableWidgetItem(str(template.get("name", ""))))
+            keywords = template.get("keywords", [])
+            count_item = QTableWidgetItem(str(len(keywords)))
+            count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row, 1, count_item)
+            table.setItem(row, 2, QTableWidgetItem(str(template.get("prompt_template", ""))))
+
+            edit_button = QPushButton("编辑")
+            edit_button.setObjectName("secondaryButton")
+            edit_button.clicked.connect(lambda _, tid=template["id"]: self.edit_job_template(tid))
+            table.setCellWidget(row, 3, edit_button)
+
+            delete_button = QPushButton("删除")
+            delete_button.setObjectName("dangerButton")
+            delete_button.clicked.connect(
+                lambda _, tid=template["id"]: self.delete_job_template(tid)
+            )
+            table.setCellWidget(row, 4, delete_button)
+
+    def _refresh_schedules_table(self, schedules: list[dict[str, Any]]) -> None:
+        table = self.schedules_table
+        table.setRowCount(len(schedules))
+        type_labels = {"interval": "按间隔", "once": "一次性", "daily": "每日定时"}
+        for row, schedule in enumerate(schedules):
+            table.setItem(row, 0, QTableWidgetItem(str(schedule.get("name", ""))))
+            table.setItem(row, 1, QTableWidgetItem(str(schedule.get("template_name", ""))))
+            type_text = type_labels.get(schedule.get("schedule_type", ""), "未知")
+            table.setItem(row, 2, QTableWidgetItem(type_text))
+            table.setItem(row, 3, QTableWidgetItem(str(schedule.get("schedule_value", ""))))
+            table.setItem(row, 4, QTableWidgetItem(str(schedule.get("next_run_at", ""))))
+
+            run_count_item = QTableWidgetItem(str(schedule.get("run_count", 0)))
+            run_count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row, 5, run_count_item)
+
+            enabled = bool(schedule.get("enabled", 0))
+            toggle_button = QPushButton("禁用" if enabled else "启用")
+            toggle_button.setObjectName("secondaryButton")
+            toggle_button.clicked.connect(
+                lambda _, sid=schedule["id"], en=enabled: self.toggle_schedule(sid, not en)
+            )
+            table.setCellWidget(row, 6, toggle_button)
+
+            actions = QWidget()
+            actions_layout = QHBoxLayout(actions)
+            actions_layout.setContentsMargins(6, 2, 6, 2)
+            actions_layout.setSpacing(8)
+            run_now = QPushButton("立即执行")
+            run_now.setObjectName("secondaryButton")
+            run_now.clicked.connect(lambda _, sid=schedule["id"]: self.run_schedule_now(sid))
+            delete = QPushButton("删除")
+            delete.setObjectName("dangerButton")
+            delete.clicked.connect(lambda _, sid=schedule["id"]: self.delete_schedule(sid))
+            actions_layout.addWidget(run_now)
+            actions_layout.addWidget(delete)
+            actions_layout.addStretch()
+            table.setCellWidget(row, 7, actions)
+
+    def save_job_template(self) -> None:
+        name = self.template_name.text().strip()
+        keywords_text = self.template_keywords.toPlainText().strip()
+        keywords = normalize_keywords(keywords_text)
+        prompt_template = self.template_prompt_template.text().strip() or DEFAULT_PROMPT
+        interval_seconds = self.template_interval_seconds.value()
+        account_cooldown_seconds = self.template_account_cooldown_seconds.value()
+        max_attempts = self.template_max_attempts.value()
+
+        def save() -> dict[str, Any]:
+            if self.editing_template_id:
+                return self.backend.research_store.update_job_template(
+                    self.editing_template_id,
+                    name=name,
+                    keywords=keywords,
+                    prompt_template=prompt_template,
+                    interval_seconds=interval_seconds,
+                    account_cooldown_seconds=account_cooldown_seconds,
+                    max_attempts=max_attempts,
+                )
+            return self.backend.research_store.create_job_template(
+                name=name,
+                keywords=keywords,
+                prompt_template=prompt_template,
+                interval_seconds=interval_seconds,
+                account_cooldown_seconds=account_cooldown_seconds,
+                max_attempts=max_attempts,
+            )
+
+        future = self.backend.call(save)
+
+        def apply(_result: dict[str, Any]) -> None:
+            self._reset_template_form()
+            self.refresh_schedules_page()
+
+        self._watch(future, apply, label="保存任务模板")
+
+    def edit_job_template(self, template_id: str) -> None:
+        def load() -> dict[str, Any]:
+            return self.backend.research_store.get_job_template(template_id)
+
+        future = self.backend.call(load)
+
+        def apply(template: dict[str, Any]) -> None:
+            self.editing_template_id = template_id
+            self.template_name.setText(str(template.get("name", "")))
+            self.template_keywords.setPlainText("\n".join(template.get("keywords", [])))
+            self.template_prompt_template.setText(
+                str(template.get("prompt_template", DEFAULT_PROMPT))
+            )
+            self.template_interval_seconds.setValue(int(template.get("interval_seconds", 10)))
+            self.template_account_cooldown_seconds.setValue(
+                int(template.get("account_cooldown_seconds", 0))
+            )
+            self.template_max_attempts.setValue(int(template.get("max_attempts", 2)))
+            self.template_save_button.setText("更新模板")
+
+        self._watch(future, apply, label="读取任务模板")
+
+    def delete_job_template(self, template_id: str) -> None:
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            "删除模板将同时删除引用它的所有定时计划，是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        def delete() -> None:
+            self.backend.research_store.delete_job_template(template_id)
+
+        future = self.backend.call(delete)
+
+        def apply(_: None) -> None:
+            if self.editing_template_id == template_id:
+                self._reset_template_form()
+            self.refresh_schedules_page()
+
+        self._watch(future, apply, label="删除任务模板")
+
+    def create_schedule(self) -> None:
+        name = self.schedule_name.text().strip()
+        template_id = self.schedule_template_id.currentData()
+        schedule_type = self.schedule_type.currentData()
+        schedule_value = self.schedule_value.text().strip()
+
+        if not template_id:
+            QMessageBox.warning(self, "提示", "请选择一个任务模板")
+            return
+
+        def save() -> dict[str, Any]:
+            return self.backend.research_store.create_schedule(
+                name=name,
+                template_id=template_id,
+                schedule_type=schedule_type,
+                schedule_value=schedule_value,
+            )
+
+        future = self.backend.call(save)
+
+        def apply(_result: dict[str, Any]) -> None:
+            self.schedule_name.clear()
+            self.schedule_value.clear()
+            self.schedule_template_id.setCurrentIndex(0)
+            self.refresh_schedules_page()
+
+        self._watch(future, apply, label="创建触发计划")
+
+    def toggle_schedule(self, schedule_id: str, enabled: bool) -> None:
+        def toggle() -> dict[str, Any]:
+            return self.backend.research_store.toggle_schedule(schedule_id, enabled)
+
+        future = self.backend.call(toggle)
+        self._watch(future, lambda _result: self.refresh_schedules_page(), label="切换计划状态")
+
+    def delete_schedule(self, schedule_id: str) -> None:
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            "确定删除该触发计划吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        def delete() -> None:
+            self.backend.research_store.delete_schedule(schedule_id)
+
+        future = self.backend.call(delete)
+        self._watch(future, lambda _: self.refresh_schedules_page(), label="删除触发计划")
+
+    def run_schedule_now(self, schedule_id: str) -> None:
+        def run() -> dict[str, Any]:
+            return self.backend.research_store.create_job_from_schedule(schedule_id)
+
+        future = self.backend.call(run)
+
+        def apply(job: dict[str, Any]) -> None:
+            task_count = len(job.get("tasks", []))
+            QMessageBox.information(
+                self,
+                "已触发",
+                f"已按模板最新配置生成采集任务：{job.get('name', '')}\n共 {task_count} 个关键词",
+            )
+            self.backend.scheduler.wake()
+
+        self._watch(future, apply, label="立即执行计划")
 
     def refresh_accounts(self) -> None:
         if self.refreshing_accounts:

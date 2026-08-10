@@ -113,3 +113,39 @@ class ResearchJobCreateRequest(BaseModel):
     interval_seconds: int = Field(default=10, ge=1, le=86400)
     account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
     max_attempts: int = Field(default=2, ge=1, le=3)
+
+
+class ResearchJobTemplateCreateRequest(BaseModel):
+    name: str = ""
+    keywords: list[str]
+    prompt_template: str = "{keyword}"
+    interval_seconds: int = Field(default=10, ge=1, le=86400)
+    account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
+    max_attempts: int = Field(default=2, ge=1, le=3)
+
+
+class ResearchJobTemplateUpdateRequest(BaseModel):
+    name: str = ""
+    keywords: list[str]
+    prompt_template: str = "{keyword}"
+    interval_seconds: int = Field(default=10, ge=1, le=86400)
+    account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
+    max_attempts: int = Field(default=2, ge=1, le=3)
+
+
+class ResearchScheduleCreateRequest(BaseModel):
+    name: str = ""
+    template_id: str
+    schedule_type: str = "interval"
+    schedule_value: str
+
+
+class ResearchScheduleUpdateRequest(BaseModel):
+    name: str = ""
+    template_id: str
+    schedule_type: str = "interval"
+    schedule_value: str
+
+
+class ResearchScheduleToggleRequest(BaseModel):
+    enabled: bool

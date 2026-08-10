@@ -8,7 +8,7 @@ from typing import Any
 from .account_manager import BrowserAccountPool
 from .browser_client import ReferenceExpansionError
 from .research_links import normalize_thinking_references
-from .research_store import ResearchStore, local_now
+from .research_store import ResearchStore, _compute_next_run, local_now
 
 RISK_MARKERS = (
     "captcha",
@@ -107,6 +107,7 @@ class ResearchScheduler:
     async def _run_loop(self) -> None:
         while not self._stopping:
             try:
+                await self._check_schedules()
                 await self._dispatch_due_tasks()
                 self.last_error = ""
             except asyncio.CancelledError:
@@ -121,6 +122,27 @@ class ResearchScheduler:
             with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
                 await asyncio.wait_for(self._wake_event.wait(), timeout=2)
             self._wake_event.clear()
+
+    async def _check_schedules(self) -> None:
+        """Trigger any overdue research schedules and advance their next run."""
+        triggered = False
+        for schedule in self.store.due_schedules(limit=20):
+            if self._stopping:
+                break
+            try:
+                job = self.store.create_job_from_schedule(schedule["id"])
+                next_run_at = _compute_next_run(
+                    schedule["schedule_type"], schedule["schedule_value"]
+                )
+                self.store.advance_schedule(schedule["id"], job["id"], next_run_at)
+                if schedule["schedule_type"] == "once":
+                    self.store.toggle_schedule(schedule["id"], False)
+                triggered = True
+            except Exception as exc:
+                self.store.update_schedule_error(schedule["id"], str(exc))
+                self.last_error = str(exc)
+        if triggered:
+            self.wake()
 
     async def _dispatch_due_tasks(self) -> None:
         dispatched_any = False
