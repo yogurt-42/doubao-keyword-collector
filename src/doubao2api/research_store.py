@@ -1107,6 +1107,7 @@ class ResearchStore:
         self,
         *,
         job_id: str = "",
+        job_ids: list[str] | None = None,
         keyword: str | list[str] = "",
         platform: str = "",
         account_id: str = "",
@@ -1115,7 +1116,13 @@ class ResearchStore:
     ) -> tuple[str, list[Any]]:
         conditions: list[str] = []
         params: list[Any] = []
-        if job_id:
+        if job_ids is not None:
+            unique_ids = list(dict.fromkeys(job_id.strip() for job_id in job_ids if job_id.strip()))
+            if unique_ids:
+                placeholders = ", ".join("?" for _ in unique_ids)
+                conditions.append(f"r.job_id IN ({placeholders})")
+                params.extend(unique_ids)
+        elif job_id:
             conditions.append("r.job_id = ?")
             params.append(job_id)
         if isinstance(keyword, list):
@@ -1470,41 +1477,43 @@ class ResearchStore:
     def source_comparison(
         self,
         *,
-        date_a_from: str,
-        date_a_to: str,
-        date_b_from: str,
-        date_b_to: str,
-        job_id: str = "",
+        job_ids_a: list[str],
+        job_ids_b: list[str],
         keyword: str | list[str] = "",
         platform: str = "",
         account_id: str = "",
     ) -> dict[str, Any]:
-        where, params = self._result_filter(
-            job_id=job_id,
+        where_a, params_a = self._result_filter(
+            job_ids=job_ids_a,
             keyword=keyword,
             platform=platform,
             account_id=account_id,
         )
-        joiner = " AND " if where else " WHERE "
+        where_b, params_b = self._result_filter(
+            job_ids=job_ids_b,
+            keyword=keyword,
+            platform=platform,
+            account_id=account_id,
+        )
 
         def counts_for(
-            connection: sqlite3.Connection, date_from: str, date_to: str
+            connection: sqlite3.Connection, where: str, params: list[Any]
         ) -> dict[str, int]:
             rows = connection.execute(
                 f"""
                 SELECT COALESCE(NULLIF(r.platform, ''), '未知平台') AS platform,
                     COUNT(*) AS count
                 FROM research_results r
-                {where}{joiner}r.collected_date >= ? AND r.collected_date <= ?
+                {where}
                 GROUP BY COALESCE(NULLIF(r.platform, ''), '未知平台')
                 """,
-                [*params, date_from, date_to],
+                params,
             ).fetchall()
             return {str(row["platform"]): int(row["count"]) for row in rows}
 
         with self._connect() as connection:
-            counts_a = counts_for(connection, date_a_from, date_a_to)
-            counts_b = counts_for(connection, date_b_from, date_b_to)
+            counts_a = counts_for(connection, where_a, params_a)
+            counts_b = counts_for(connection, where_b, params_b)
 
         rows: list[dict[str, Any]] = []
         total_a = sum(counts_a.values())

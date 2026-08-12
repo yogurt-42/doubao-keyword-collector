@@ -255,16 +255,13 @@ def test_results_keywords_filter(tmp_path: Path) -> None:
 
 def test_source_comparison(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
-        _create_job_with_result(client)
+        job_id, _ = _create_job_with_result(client)
 
         response = client.post(
             "/admin/api/research/results/source-comparison",
             json={
-                "date_a_from": "2099-01-01",
-                "date_a_to": "2099-01-01",
-                "date_b_from": "2099-01-02",
-                "date_b_to": "2099-01-02",
-                "keywords": ["新能源汽车"],
+                "job_ids_a": [job_id],
+                "job_ids_b": ["nonexistent-job"],
             },
         )
         assert response.status_code == 200

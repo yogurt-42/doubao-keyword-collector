@@ -72,6 +72,25 @@
    - `_expand_references` 中当已收集到 `expected` 条或 `expected == 0` 时提前退出循环。
    - 调试快照默认仅在启用调试标志时写入，或限制 body 大小。
 
+### 优化：触发豆包人机验证后账号卡住无处理
+
+**现象**：实际采集时一旦豆包页面触发验证码/安全校验/人机验证，账号页面会卡住，既不暂停账号，也不提示用户人工处理；当前关键词任务一直挂起，直到所有任务跑完才按失败处理，期间调度器仍可能继续分配任务。
+
+**目标**：
+- 补强验证码检测：除了 `body.innerText` 文本匹配，增加对验证码 iframe、特定 DOM 结构、连续 JS 无响应的检测。
+- 任务执行期增加“卡住兜底”：长时间无进展时主动截图并触发验证码/风控判定。
+- 一旦确认需人工验证，立即调用 `pause_account(account_id, 1800, ...)`，避免继续占用调度。
+- 优化 Native UI 提示：更醒目的“需处理验证”状态，必要时弹窗或截图浮层。
+- 点击“验证已完成”后先探测页面恢复正常再 `resume_account`，防止反复失败。
+
+**涉及文件**：
+- `src/doubao2api/selectors.py`
+- `src/doubao2api/embedded_browser_client.py`
+- `src/doubao2api/browser_client.py`
+- `src/doubao2api/research_scheduler.py`
+- `src/doubao2api/native_dashboard.py`
+- `src/doubao2api/research_store.py`
+
 ---
 
 ## 数据模型/表变更汇总

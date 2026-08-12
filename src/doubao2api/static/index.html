@@ -373,27 +373,16 @@
     <main id="comparison" class="page">
       <div class="panel">
         <h2>信源对比</h2>
-        <p class="hint">选择 A、B 两个日期区间，分析平台来源的变化情况。</p>
+        <p class="hint">选择 A、B 两个任务群，分析平台来源的变化情况。</p>
         <div class="row three">
-          <div><label for="cmpJob">任务</label><select id="cmpJob"><option value="">全部任务</option></select></div>
+          <div><label for="cmpJobsA">A 任务群</label><select id="cmpJobsA" multiple size="4"><option value="" disabled>选择任务</option></select></div>
+          <div><label for="cmpJobsB">B 任务群</label><select id="cmpJobsB" multiple size="4"><option value="" disabled>选择任务</option></select></div>
           <div><label for="cmpAccount">账号</label><select id="cmpAccount"><option value="">全部账号</option></select></div>
-          <div><label for="cmpPlatform">平台</label><input id="cmpPlatform" placeholder="可选"></div>
         </div>
-        <div class="row" style="margin-top:12px">
-          <div class="panel" style="margin-top:0">
-            <strong>A 区间</strong>
-            <div class="row">
-              <div><label for="cmpDateAFrom">开始</label><input id="cmpDateAFrom" type="date"></div>
-              <div><label for="cmpDateATo">结束</label><input id="cmpDateATo" type="date"></div>
-            </div>
-          </div>
-          <div class="panel" style="margin-top:0">
-            <strong>B 区间</strong>
-            <div class="row">
-              <div><label for="cmpDateBFrom">开始</label><input id="cmpDateBFrom" type="date"></div>
-              <div><label for="cmpDateBTo">结束</label><input id="cmpDateBTo" type="date"></div>
-            </div>
-          </div>
+        <div class="row three" style="margin-top:12px">
+          <div><label for="cmpPlatform">平台</label><input id="cmpPlatform" placeholder="可选"></div>
+          <div><label for="cmpKeyword">关键词</label><input id="cmpKeyword" placeholder="可选，逗号分隔"></div>
+          <div></div>
         </div>
         <div class="actions" style="margin-top:14px">
           <button class="btn primary" id="compareSources">开始对比</button>
@@ -403,8 +392,8 @@
       <div id="comparisonResult" style="display:none">
         <div class="panel">
           <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:0">
-            <div class="stat"><strong id="cmpTotalA">0</strong><span>A 区间资料数</span></div>
-            <div class="stat"><strong id="cmpTotalB">0</strong><span>B 区间资料数</span></div>
+            <div class="stat"><strong id="cmpTotalA">0</strong><span>A 任务群资料数</span></div>
+            <div class="stat"><strong id="cmpTotalB">0</strong><span>B 任务群资料数</span></div>
             <div class="stat"><strong id="cmpAdded">0</strong><span>新增平台</span></div>
             <div class="stat"><strong id="cmpRemoved">0</strong><span>掉出平台</span></div>
           </div>
@@ -414,8 +403,8 @@
           <h2>平台变化明细</h2>
           <div class="tablewrap">
             <table>
-              <thead><tr><th>平台</th><th>状态</th><th>A 区间数量</th><th>B 区间数量</th><th>A 区间占比</th><th>B 区间占比</th><th>变化量</th><th>变化率</th></tr></thead>
-              <tbody id="comparisonRows"><tr><td colspan="8" class="empty">请选择区间后点击对比</td></tr></tbody>
+              <thead><tr><th>平台</th><th>状态</th><th>A 群数量</th><th>B 群数量</th><th>A 群占比</th><th>B 群占比</th><th>变化量</th><th>变化率</th></tr></thead>
+              <tbody id="comparisonRows"><tr><td colspan="8" class="empty">请选择任务群后点击对比</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -963,9 +952,25 @@
     async function loadComparisonOptions() {
       try {
         const data = await api('/admin/api/research/results?limit=1');
-        preserveSelect('cmpJob', data.jobs || [], 'id', 'name', '全部任务');
+        preserveMultiSelect('cmpJobsA', data.jobs || [], 'id', 'name');
+        preserveMultiSelect('cmpJobsB', data.jobs || [], 'id', 'name');
         preserveSelect('cmpAccount', data.accounts || [], null, null, '全部账号');
       } catch (error) { toast(error.message, true); }
+    }
+
+    function preserveMultiSelect(id, values, valueKey, labelKey) {
+      const select = $(id);
+      const selected = new Set([...select.selectedOptions].map(option => option.value));
+      select.innerHTML = '<option value="" disabled>选择任务</option>';
+      for (const item of values) {
+        const value = valueKey ? item[valueKey] : item;
+        const label = valueKey ? (item[labelKey] || value) : item;
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        if (selected.has(value)) option.selected = true;
+        select.appendChild(option);
+      }
     }
 
     const COMPARISON_STATUS = {
@@ -975,16 +980,14 @@
     };
     $('compareSources').addEventListener('click', async () => {
       const body = {
-        date_a_from: $('cmpDateAFrom').value,
-        date_a_to: $('cmpDateATo').value,
-        date_b_from: $('cmpDateBFrom').value,
-        date_b_to: $('cmpDateBTo').value,
-        job_id: $('cmpJob').value,
+        job_ids_a: [...$('cmpJobsA').selectedOptions].map(option => option.value).filter(Boolean),
+        job_ids_b: [...$('cmpJobsB').selectedOptions].map(option => option.value).filter(Boolean),
         account_id: $('cmpAccount').value,
         platform: $('cmpPlatform').value.trim(),
+        keywords: $('cmpKeyword').value.split(',').map(s => s.trim()).filter(Boolean),
       };
-      if (!body.date_a_from || !body.date_a_to || !body.date_b_from || !body.date_b_to) {
-        return toast('请选择完整的 A、B 日期区间', true);
+      if (!body.job_ids_a.length || !body.job_ids_b.length) {
+        return toast('请为 A 任务群和 B 任务群各选择至少一个任务', true);
       }
       try {
         const data = await postJSON('/admin/api/research/results/source-comparison', body);

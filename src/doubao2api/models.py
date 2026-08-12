@@ -164,11 +164,8 @@ class ResearchResultsSyncRequest(BaseModel):
 
 
 class ResearchResultsSourceComparisonRequest(BaseModel):
-    date_a_from: str
-    date_a_to: str
-    date_b_from: str
-    date_b_to: str
-    job_id: str = ""
+    job_ids_a: list[str]
+    job_ids_b: list[str]
     keywords: list[str] = Field(default_factory=list)
     platform: str = ""
     account_id: str = ""

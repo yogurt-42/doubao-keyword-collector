@@ -828,11 +828,8 @@ def create_app(
         body: ResearchResultsSourceComparisonRequest,
     ) -> dict[str, Any]:
         return research_store.source_comparison(
-            date_a_from=body.date_a_from,
-            date_a_to=body.date_a_to,
-            date_b_from=body.date_b_from,
-            date_b_to=body.date_b_to,
-            job_id=body.job_id,
+            job_ids_a=body.job_ids_a,
+            job_ids_b=body.job_ids_b,
             keyword=body.keywords,
             platform=body.platform,
             account_id=body.account_id,

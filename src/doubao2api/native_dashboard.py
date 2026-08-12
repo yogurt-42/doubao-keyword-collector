@@ -149,18 +149,29 @@ class MultiSelectFilter(QWidget):
         select_all.clicked.connect(self.select_all)
         clear.clicked.connect(self.clear_selection)
 
-    def set_options(self, values: list[str]) -> None:
+    def set_options(
+        self, values: list[str] | list[tuple[str, str]]
+    ) -> None:
+        normalized: list[tuple[str, str]] = []
+        for value in values:
+            if isinstance(value, tuple):
+                normalized.append(value)
+            else:
+                normalized.append((value, value))
         current = [
-            str(self.list_widget.item(index).data(Qt.ItemDataRole.UserRole))
+            (
+                self.list_widget.item(index).text(),
+                str(self.list_widget.item(index).data(Qt.ItemDataRole.UserRole)),
+            )
             for index in range(self.list_widget.count())
         ]
-        if current == values:
+        if current == normalized:
             return
         selected = set(self.selected_values())
         self._updating = True
         self.list_widget.clear()
-        for value in values:
-            item = QListWidgetItem(value)
+        for display, value in normalized:
+            item = QListWidgetItem(display)
             item.setData(Qt.ItemDataRole.UserRole, value)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(
@@ -1469,63 +1480,59 @@ class NativeDashboard(QWidget):
         return scroll
 
     def _build_comparison_page(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         page = QWidget()
+        page.setMinimumWidth(900)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 8, 4, 4)
         layout.setSpacing(10)
 
-        intro = QLabel("对比两个采集时段中 AI 引用信源的变化：新增、掉出及持续出现的平台一目了然")
+        intro = QLabel(
+            "对比两个任务群的 AI 引用信源：A 群与 B 群各自勾选若干历史任务，分析平台来源的变化"
+        )
         intro.setObjectName("workflowBanner")
         layout.addWidget(intro)
 
-        scope = QGroupBox("对比范围")
-        scope_layout = QHBoxLayout(scope)
-        self.compare_job = QComboBox()
-        self.compare_job.addItem("全部任务", "")
+        global_filter = QGroupBox("全局筛选")
+        global_filter_layout = QHBoxLayout(global_filter)
         self.compare_keyword = MultiSelectFilter("全部关键词")
         self.compare_account = QComboBox()
         self.compare_account.addItem("全部账号", "")
-        scope_layout.addWidget(QLabel("任务"))
-        scope_layout.addWidget(self.compare_job, 2)
-        scope_layout.addWidget(QLabel("关键词"))
-        scope_layout.addWidget(self.compare_keyword, 2)
-        scope_layout.addWidget(QLabel("账号"))
-        scope_layout.addWidget(self.compare_account, 1)
-        layout.addWidget(scope)
+        global_filter_layout.addWidget(QLabel("关键词"))
+        global_filter_layout.addWidget(self.compare_keyword, 2)
+        global_filter_layout.addWidget(QLabel("账号"))
+        global_filter_layout.addWidget(self.compare_account, 1)
+        layout.addWidget(global_filter)
 
-        ranges = QHBoxLayout()
-        ranges.setSpacing(10)
-        range_a = QFrame()
-        range_a.setObjectName("compareCard")
-        range_a_layout = QHBoxLayout(range_a)
-        range_a_layout.addWidget(QLabel("A 时段"))
-        self.compare_a_range = DateRangePicker(
-            QDate.currentDate().addDays(-60),
-            QDate.currentDate().addDays(-31),
-        )
-        range_a_layout.addWidget(self.compare_a_range, 1)
-        ranges.addWidget(range_a, 1)
+        groups = QHBoxLayout()
+        groups.setSpacing(10)
+        group_a = QFrame()
+        group_a.setObjectName("compareCard")
+        group_a_layout = QHBoxLayout(group_a)
+        group_a_layout.addWidget(QLabel("A 任务群"))
+        self.compare_jobs_a = MultiSelectFilter("选择任务")
+        group_a_layout.addWidget(self.compare_jobs_a, 1)
+        groups.addWidget(group_a, 1)
 
-        range_b = QFrame()
-        range_b.setObjectName("compareCard")
-        range_b_layout = QHBoxLayout(range_b)
-        range_b_layout.addWidget(QLabel("B 时段"))
-        self.compare_b_range = DateRangePicker(
-            QDate.currentDate().addDays(-30),
-            QDate.currentDate(),
-        )
-        range_b_layout.addWidget(self.compare_b_range, 1)
-        ranges.addWidget(range_b, 1)
+        group_b = QFrame()
+        group_b.setObjectName("compareCard")
+        group_b_layout = QHBoxLayout(group_b)
+        group_b_layout.addWidget(QLabel("B 任务群"))
+        self.compare_jobs_b = MultiSelectFilter("选择任务")
+        group_b_layout.addWidget(self.compare_jobs_b, 1)
+        groups.addWidget(group_b, 1)
         compare_button = QPushButton("分析信源变化")
         compare_button.setObjectName("primaryButton")
-        compare_button.clicked.connect(self.refresh_source_comparison)
-        ranges.addWidget(compare_button)
-        layout.addLayout(ranges)
+        compare_button.clicked.connect(self._on_compare_button_clicked)
+        groups.addWidget(compare_button)
+        layout.addLayout(groups)
 
         comparison_metrics = QGridLayout()
         comparison_metrics.setHorizontalSpacing(10)
-        a_card, self.compare_a_value = self._metric_card("A 时段信源平台", "blue")
-        b_card, self.compare_b_value = self._metric_card("B 时段信源平台", "purple")
+        a_card, self.compare_a_value = self._metric_card("A 任务群信源平台", "blue")
+        b_card, self.compare_b_value = self._metric_card("B 任务群信源平台", "purple")
         added_card, self.compare_added_value = self._metric_card("新增平台", "green")
         removed_card, self.compare_removed_value = self._metric_card("掉出平台", "amber")
         for column, card in enumerate((a_card, b_card, added_card, removed_card)):
@@ -1534,37 +1541,42 @@ class NativeDashboard(QWidget):
 
         changes = QHBoxLayout()
         changes.setSpacing(10)
-        added_group = QGroupBox("＋ 新增信源（B 有、A 无）")
-        added_group.setProperty("tone", "positive")
-        added_layout = QVBoxLayout(added_group)
-        self.compare_added_sources = QLabel("暂无")
-        self.compare_added_sources.setObjectName("sourceList")
-        self.compare_added_sources.setWordWrap(True)
-        added_layout.addWidget(self.compare_added_sources)
-        changes.addWidget(added_group, 1)
+        self._compare_source_rows: dict[str, list[dict[str, Any]]] = {}
 
-        removed_group = QGroupBox("－ 掉出信源（A 有、B 无）")
-        removed_group.setProperty("tone", "negative")
-        removed_layout = QVBoxLayout(removed_group)
-        self.compare_removed_sources = QLabel("暂无")
-        self.compare_removed_sources.setObjectName("sourceList")
-        self.compare_removed_sources.setWordWrap(True)
-        removed_layout.addWidget(self.compare_removed_sources)
-        changes.addWidget(removed_group, 1)
+        def make_source_card(
+            title: str, tone: str, status: str
+        ) -> tuple[QGroupBox, QLabel, QPushButton]:
+            group = QGroupBox(title)
+            group.setProperty("tone", tone)
+            group.setMaximumHeight(260)
+            card_layout = QVBoxLayout(group)
+            card_layout.setSpacing(6)
+            label = QLabel("暂无")
+            label.setObjectName("sourceList")
+            label.setWordWrap(True)
+            card_layout.addWidget(label, 1)
+            button = QPushButton("查看全部")
+            button.setObjectName("secondaryButton")
+            button.setVisible(False)
+            button.clicked.connect(lambda _, s=status: self._show_comparison_source_list(s))
+            card_layout.addWidget(button)
+            changes.addWidget(group, 1)
+            return group, label, button
 
-        continued_group = QGroupBox("＝ 持续出现（A、B 均有）")
-        continued_group.setProperty("tone", "neutral")
-        continued_layout = QVBoxLayout(continued_group)
-        self.compare_continued_sources = QLabel("暂无")
-        self.compare_continued_sources.setObjectName("sourceList")
-        self.compare_continued_sources.setWordWrap(True)
-        continued_layout.addWidget(self.compare_continued_sources)
-        changes.addWidget(continued_group, 1)
+        _, self.compare_added_sources, self.compare_added_more = make_source_card(
+            "＋ 新增信源（B 有、A 无）", "positive", "added"
+        )
+        _, self.compare_removed_sources, self.compare_removed_more = make_source_card(
+            "－ 掉出信源（A 有、B 无）", "negative", "removed"
+        )
+        _, self.compare_continued_sources, self.compare_continued_more = make_source_card(
+            "＝ 持续出现（A、B 均有）", "neutral", "continued"
+        )
         layout.addLayout(changes)
 
         table_group = QGroupBox("信源变化明细")
         table_layout = QVBoxLayout(table_group)
-        self.comparison_summary = QLabel("拖选两个时段后，点击“分析信源变化”")
+        self.comparison_summary = QLabel("为 A、B 任务群各选择至少一个任务后，点击“分析信源变化”")
         self.comparison_summary.setObjectName("muted")
         table_layout.addWidget(self.comparison_summary)
         self.comparison_table = QTableWidget(0, 6)
@@ -1577,7 +1589,58 @@ class NativeDashboard(QWidget):
         )
         table_layout.addWidget(self.comparison_table)
         layout.addWidget(table_group, 1)
-        return page
+        scroll.setWidget(page)
+        return scroll
+
+    def _show_comparison_source_list(self, status: str) -> None:
+        rows = self._compare_source_rows.get(status, [])
+        titles = {
+            "added": "新增信源（B 有、A 无）",
+            "removed": "掉出信源（A 有、B 无）",
+            "continued": "持续出现信源（A、B 均有）",
+        }
+        dialog = QDialog(self)
+        dialog.setWindowTitle(titles.get(status, "信源列表"))
+        dialog.setMinimumSize(700, 500)
+        dialog_layout = QVBoxLayout(dialog)
+        table = QTableWidget(len(rows), 5)
+        table.setHorizontalHeaderLabels(
+            ["信源平台", "A 出现次数", "B 出现次数", "变化量", "变化率"]
+        )
+        self._configure_table(table)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for index, row in enumerate(rows):
+            change_rate = row.get("change_rate")
+            values = [
+                row["platform"],
+                str(row["a_count"]),
+                str(row["b_count"]),
+                f"{int(row['delta']):+d}",
+                f"{change_rate}%" if change_rate is not None else "-",
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if column >= 1:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                table.setItem(index, column, item)
+        dialog_layout.addWidget(table)
+        close_button = QPushButton("关闭")
+        close_button.clicked.connect(dialog.close)
+        dialog_layout.addWidget(close_button)
+        dialog.exec()
+
+    def _on_compare_button_clicked(self) -> None:
+        if (
+            not self.compare_jobs_a.selected_values()
+            or not self.compare_jobs_b.selected_values()
+        ):
+            QMessageBox.information(
+                self,
+                "提示",
+                "请为 A 任务群和 B 任务群各选择至少一个任务",
+            )
+            return
+        self.refresh_source_comparison()
 
     def _build_platforms_page(self) -> QWidget:
         page = QWidget()
@@ -3351,44 +3414,57 @@ class NativeDashboard(QWidget):
     def refresh_source_comparison(self) -> None:
         if self.refreshing_comparison:
             return
-        date_a_from = self.compare_a_range.date_from()
-        date_a_to = self.compare_a_range.date_to()
-        date_b_from = self.compare_b_range.date_from()
-        date_b_to = self.compare_b_range.date_to()
         self.refreshing_comparison = True
-        job_id = str(self.compare_job.currentData() or "")
+        job_ids_a = self.compare_jobs_a.selected_values()
+        job_ids_b = self.compare_jobs_b.selected_values()
         keywords = self.compare_keyword.selected_values()
         account_id = str(self.compare_account.currentData() or "")
+        has_groups = bool(job_ids_a) and bool(job_ids_b)
 
         def load() -> tuple[Any, ...]:
-            return (
-                self.backend.research_store.source_comparison(
-                    date_a_from=date_a_from,
-                    date_a_to=date_a_to,
-                    date_b_from=date_b_from,
-                    date_b_to=date_b_to,
-                    job_id=job_id,
-                    keyword=keywords,
-                    account_id=account_id,
-                ),
-                self.backend.research_store.result_jobs(),
-                self.backend.research_store.result_accounts(),
-                self.backend.research_store.result_keywords(),
+            jobs = self.backend.research_store.result_jobs()
+            accounts = self.backend.research_store.result_accounts()
+            keyword_options = self.backend.research_store.result_keywords()
+            if not has_groups:
+                return (None, jobs, accounts, keyword_options)
+            result = self.backend.research_store.source_comparison(
+                job_ids_a=job_ids_a,
+                job_ids_b=job_ids_b,
+                keyword=keywords,
+                account_id=account_id,
             )
+            return (result, jobs, accounts, keyword_options)
 
         future = self.backend.call(load)
 
         def apply(payload: tuple[Any, ...]) -> None:
             self.refreshing_comparison = False
             result, jobs, accounts, keyword_options = payload
+
+            job_options = [
+                (f"{job['name']}（{job['result_count']}）", job['id']) for job in jobs
+            ]
+            self.compare_jobs_a.set_options(job_options)
+            self.compare_jobs_b.set_options(job_options)
+
+            previous_account = self.compare_account.currentData()
+            self.compare_account.clear()
+            self.compare_account.addItem("全部账号", "")
+            for value in accounts:
+                self.compare_account.addItem(value, value)
+            selected_account = self.compare_account.findData(previous_account)
+            if selected_account >= 0:
+                self.compare_account.setCurrentIndex(selected_account)
+            self.compare_keyword.set_options(keyword_options)
+
+            if result is None:
+                return
+
             summary = result["summary"]
             rows = result["rows"]
             signature = (
-                date_a_from,
-                date_a_to,
-                date_b_from,
-                date_b_to,
-                job_id,
+                tuple(job_ids_a),
+                tuple(job_ids_b),
                 tuple(keywords),
                 account_id,
                 tuple(
@@ -3408,44 +3484,46 @@ class NativeDashboard(QWidget):
                 return
             self.comparison_signature = signature
 
-            previous_job = self.compare_job.currentData()
-            self.compare_job.clear()
-            self.compare_job.addItem("全部任务", "")
-            for job in jobs:
-                self.compare_job.addItem(
-                    f"{job['name']}（{job['result_count']}）",
-                    job["id"],
-                )
-            selected_job = self.compare_job.findData(previous_job)
-            if selected_job >= 0:
-                self.compare_job.setCurrentIndex(selected_job)
-            previous_account = self.compare_account.currentData()
-            self.compare_account.clear()
-            self.compare_account.addItem("全部账号", "")
-            for value in accounts:
-                self.compare_account.addItem(value, value)
-            selected_account = self.compare_account.findData(previous_account)
-            if selected_account >= 0:
-                self.compare_account.setCurrentIndex(selected_account)
-            self.compare_keyword.set_options(keyword_options)
-
             self.compare_a_value.setText(str(summary["a_sources"]))
             self.compare_b_value.setText(str(summary["b_sources"]))
             self.compare_added_value.setText(str(summary["added_platforms"]))
             self.compare_removed_value.setText(str(summary["removed_platforms"]))
-            added_sources = [str(row["platform"]) for row in rows if row["status"] == "added"]
-            removed_sources = [str(row["platform"]) for row in rows if row["status"] == "removed"]
-            continued_sources = [
-                str(row["platform"]) for row in rows if row["status"] == "continued"
-            ]
-            self.compare_added_sources.setText("  ·  ".join(added_sources) or "暂无新增平台")
-            self.compare_removed_sources.setText("  ·  ".join(removed_sources) or "暂无掉出平台")
-            self.compare_continued_sources.setText(
-                "  ·  ".join(continued_sources) or "暂无持续平台"
-            )
+
+            self._compare_source_rows = {
+                "added": [row for row in rows if row["status"] == "added"],
+                "removed": [row for row in rows if row["status"] == "removed"],
+                "continued": [row for row in rows if row["status"] == "continued"],
+            }
+            top_n = 10
+            for status, label, button, empty_text in (
+                (
+                    "added",
+                    self.compare_added_sources,
+                    self.compare_added_more,
+                    "暂无新增平台",
+                ),
+                (
+                    "removed",
+                    self.compare_removed_sources,
+                    self.compare_removed_more,
+                    "暂无掉出平台",
+                ),
+                (
+                    "continued",
+                    self.compare_continued_sources,
+                    self.compare_continued_more,
+                    "暂无持续平台",
+                ),
+            ):
+                full = self._compare_source_rows[status]
+                shown = full[:top_n]
+                label.setText("  ·  ".join(str(row["platform"]) for row in shown) or empty_text)
+                button.setVisible(bool(full))
+                button.setText(f"查看全部（{len(full)}）" if full else "查看全部")
+
             self.comparison_summary.setText(
-                f"A 时段 {summary['a_sources']} 个平台 / {summary['a_total']} 次引用；"
-                f"B 时段 {summary['b_sources']} 个平台 / {summary['b_total']} 次引用；"
+                f"A 任务群 {summary['a_sources']} 个平台 / {summary['a_total']} 次引用；"
+                f"B 任务群 {summary['b_sources']} 个平台 / {summary['b_total']} 次引用；"
                 f"新增 {summary['added_platforms']}，掉出 {summary['removed_platforms']}，"
                 f"持续 {summary['continued_platforms']}"
             )

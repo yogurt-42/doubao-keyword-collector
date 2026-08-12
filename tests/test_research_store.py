@@ -66,12 +66,9 @@ def test_job_and_results_lifecycle(tmp_path: Path) -> None:
     assert store.result_keywords() == ["关键词 A"]
     assert store.list_results(keyword=["关键词 A"]) == result
     assert store.list_results(keyword=["不存在"]) == []
-    collected_date = result[0]["collected_date"]
     comparison = store.source_comparison(
-        date_a_from=collected_date,
-        date_a_to=collected_date,
-        date_b_from="2999-01-01",
-        date_b_to="2999-12-31",
+        job_ids_a=[job["id"]],
+        job_ids_b=["nonexistent-job"],
     )
     assert comparison["summary"]["a_total"] == 1
     assert comparison["summary"]["b_total"] == 0
