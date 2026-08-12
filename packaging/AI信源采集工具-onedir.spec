@@ -42,9 +42,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="AI信源采集工具",
     debug=False,
     bootloader_ignore_signals=False,
@@ -60,4 +59,15 @@ exe = EXE(
     entitlements_file=None,
     version=os.path.join(PACKAGING_DIR, "windows_version_info.txt"),
     icon=[os.path.join(PACKAGING_DIR, "app-icon.ico")],
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    a.zipfiles,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="AI信源采集工具",
 )
