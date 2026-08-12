@@ -5102,6 +5102,18 @@ _DOMAIN_ENTRIES: list[tuple[str, str, str]] = [
     (entry["domain"], entry["name"], entry["category"]) for entry in PLATFORM_ENTRIES
 ]
 
+#: Map from domain suffix to its entry for fast URL matching.
+_DOMAIN_SUFFIX_MAP: dict[str, tuple[str, str, str]] = {}
+
+
+def _build_domain_suffix_map() -> None:
+    _DOMAIN_SUFFIX_MAP.clear()
+    for domain, name, category in _DOMAIN_ENTRIES:
+        _DOMAIN_SUFFIX_MAP[domain] = (domain, name, category)
+
+
+_build_domain_suffix_map()
+
 #: Reverse lookup from Chinese platform name to category.
 _NAME_TO_CATEGORY: dict[str, str] = {entry["name"]: entry["category"] for entry in PLATFORM_ENTRIES}
 
@@ -5116,9 +5128,13 @@ def entry_for_url(url: str) -> dict[str, str] | None:
     host = _normalize_host(url)
     if not host:
         return None
-    for domain, name, category in _DOMAIN_ENTRIES:
-        if host == domain or host.endswith(f".{domain}"):
-            return {"name": name, "category": category}
+    parts = host.split(".")
+    # Try progressively shorter suffixes so the most specific domain wins.
+    for i in range(len(parts) - 1):
+        candidate = ".".join(parts[i:])
+        entry = _DOMAIN_SUFFIX_MAP.get(candidate)
+        if entry is not None:
+            return {"name": entry[1], "category": entry[2]}
     # Fallback heuristics for government and education domains.
     if host == "gov.cn" or host.endswith(".gov.cn"):
         return {"name": "政府网站", "category": "政府/官方机构"}

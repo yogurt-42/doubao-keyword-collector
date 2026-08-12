@@ -21,6 +21,7 @@ from doubao2api.research_platforms import (  # noqa: E402
     _NAME_TO_CATEGORY,
     PLATFORM_CATEGORIES,
     PLATFORM_ENTRIES,
+    _build_domain_suffix_map,
 )
 
 TARGET_FILE = Path(__file__).resolve().parent / "research_platforms.py"
@@ -131,6 +132,7 @@ def _refresh_derived_mappings() -> None:
     _DOMAIN_ENTRIES[:] = [
         (entry["domain"], entry["name"], entry["category"]) for entry in PLATFORM_ENTRIES
     ]
+    _build_domain_suffix_map()
     _NAME_TO_CATEGORY.clear()
     _NAME_TO_CATEGORY.update({entry["name"]: entry["category"] for entry in PLATFORM_ENTRIES})
 
