@@ -86,12 +86,17 @@ class ResearchScheduler:
         self._stopping = True
         if self._loop_task:
             self._loop_task.cancel()
-            await asyncio.gather(self._loop_task, return_exceptions=True)
+            with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(self._loop_task, timeout=5)
             self._loop_task = None
         for worker in list(self._workers):
             worker.cancel()
         if self._workers:
-            await asyncio.gather(*self._workers, return_exceptions=True)
+            with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                await asyncio.wait_for(
+                    asyncio.gather(*self._workers, return_exceptions=True),
+                    timeout=5,
+                )
         self._workers.clear()
         self._busy_accounts.clear()
         self.store.recover_running_tasks()
