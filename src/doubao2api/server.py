@@ -203,7 +203,7 @@ def create_app(
 
     app = FastAPI(
         title="Doubao Account Manager",
-        version="0.5.2",
+        version="1.0.0",
         lifespan=lifespan,
     )
     app.state.store = settings_store
@@ -267,7 +267,7 @@ def create_app(
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
-            "version": "0.5.2",
+            "version": "1.0.0",
             "activation_required": False,
             "open_source": True,
         }
@@ -406,7 +406,7 @@ def create_app(
         return JSONResponse(
             {
                 "name": "Doubao Account Manager",
-                "version": "0.5.2",
+                "version": "1.0.0",
                 "admin": "/admin",
                 "docs": "/docs",
                 "activation_required": False,

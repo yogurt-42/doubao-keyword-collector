@@ -1,4 +1,4 @@
-# 豆包关键词资料采集器（开源版）
+# 豆包关键词资料采集器
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/yogurt-42/doubao-keyword-collector)

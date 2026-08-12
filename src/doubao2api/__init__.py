@@ -6,7 +6,7 @@ This project is unofficial and is not affiliated with ByteDance or Doubao.
 from typing import Any
 
 __all__ = ["create_app"]
-__version__ = "0.5.2"
+__version__ = "1.0.0"
 
 
 def create_app(*args: Any, **kwargs: Any) -> Any:
