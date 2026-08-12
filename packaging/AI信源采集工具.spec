@@ -31,7 +31,6 @@ a = Analysis(
         "playwright",
         "httpx",
         "PIL",
-        "numpy",
         "lxml",
         "pandas",
         "charset_normalizer",
