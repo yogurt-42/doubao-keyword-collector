@@ -308,6 +308,9 @@ def test_long_tail_analysis_and_export(tmp_path: Path) -> None:
 
 def test_schedule_run_now(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
+        # 避免在 CI 上触发真正的浏览器调度；本测试只验证 endpoint 创建 job 并返回正确名称
+        client.app.state.research_scheduler.wake = lambda: None
+
         template = client.post(
             "/admin/api/research/templates",
             json={
