@@ -114,7 +114,7 @@
 | POST | `/admin/api/research/results/sync-platform-info` | 按最新平台规则回填旧记录平台类型 |
 | GET | `/admin/api/research/results/keywords` | 结果关键词下拉 |
 | GET | `/admin/api/research/results/jobs` | 结果任务下拉 |
-| POST | `/admin/api/research/results/source-comparison` | A/B 日期区间信源对比 |
+| POST | `/admin/api/research/results/source-comparison` | A/B 任务群信源对比 |
 | POST | `/admin/api/research/results/long-tail-analysis` | 长尾信源分析 |
 | POST | `/admin/api/research/results/long-tail/export.xlsx` | 导出优质长尾 Excel |
 | GET | `/admin/api/research/platforms` | 平台规则库列表 |

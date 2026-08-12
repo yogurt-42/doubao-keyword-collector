@@ -292,7 +292,7 @@ D:\ai-source-capturer\doubao-keyword-collector
   - `GET /admin/api/research/results/keywords|jobs`：结果筛选下拉。
   - `GET /admin/api/research/results/export.xlsx`：Excel 导出。
   - `POST /admin/api/research/results/sync-platform-info`：按最新规则回填旧记录平台类型。
-  - `POST /admin/api/research/results/source-comparison`：A/B 日期区间信源对比。
+  - `POST /admin/api/research/results/source-comparison`：A/B 任务群信源对比。
   - `POST /admin/api/research/results/long-tail-analysis`：长尾信源分析。
   - `POST /admin/api/research/results/long-tail/export.xlsx`：导出优质长尾。
   - `GET /admin/api/research/platforms` / `POST /admin/api/research/platforms/import`：平台规则库。

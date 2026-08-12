@@ -94,7 +94,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 | 历史任务 | 查看已完成/失败任务，导出 Excel、重命名、删除、同步平台信息 | `refresh_history()` / `export_job_results()` / `rename_job()` / `sync_platform_info()` |
 | 采集结果 | 筛选结果、查看信源分布、导出 Excel | `refresh_results()` / `result_dashboard()` |
 | 长尾信源 | 按频次/广度/密度识别垂直长尾宝藏平台，气泡四象限图可视化，支持悬停、导出 Excel | `analyze_long_tail()` / `LongTailChart` |
-| 信源对比 | A/B 两个日期区间对比平台变化 | `refresh_source_comparison()` |
+| 信源对比 | A/B 两个任务群对比平台来源变化 | `refresh_source_comparison()` |
 | 平台信息 | 查看当前平台规则库，导入 Excel 扩展 | `refresh_platforms()` / `platform_editor.add_entries()` |
 | 定时任务 | 任务模板 + 触发计划两层模型，支持按间隔/一次性/每日定时自动生成采集任务 | `refresh_schedules_page()` / `save_job_template()` / `create_schedule()` |
 
@@ -122,7 +122,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 ## 9. 最近已完成的关键改动
 
 - 结果页新增信源分布图表（Top 20 + 其他）。
-- 新增“信源对比”页，支持 A/B 区间平台变化分析。
+- 新增“信源对比”页，支持 A/B 任务群平台变化分析。
 - 新增“平台信息”页，支持 Excel 导入扩展平台规则。
 - `platform_type` 列改造：导出、结果页、同步按钮均可按最新规则回填。
 - 历史任务行内新增“导出”按钮，可单独导出该任务结果 Excel。

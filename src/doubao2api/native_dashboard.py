@@ -149,9 +149,7 @@ class MultiSelectFilter(QWidget):
         select_all.clicked.connect(self.select_all)
         clear.clicked.connect(self.clear_selection)
 
-    def set_options(
-        self, values: list[str] | list[tuple[str, str]]
-    ) -> None:
+    def set_options(self, values: list[str] | list[tuple[str, str]]) -> None:
         normalized: list[tuple[str, str]] = []
         for value in values:
             if isinstance(value, tuple):
@@ -1630,10 +1628,7 @@ class NativeDashboard(QWidget):
         dialog.exec()
 
     def _on_compare_button_clicked(self) -> None:
-        if (
-            not self.compare_jobs_a.selected_values()
-            or not self.compare_jobs_b.selected_values()
-        ):
+        if not self.compare_jobs_a.selected_values() or not self.compare_jobs_b.selected_values():
             QMessageBox.information(
                 self,
                 "提示",
@@ -3441,9 +3436,7 @@ class NativeDashboard(QWidget):
             self.refreshing_comparison = False
             result, jobs, accounts, keyword_options = payload
 
-            job_options = [
-                (f"{job['name']}（{job['result_count']}）", job['id']) for job in jobs
-            ]
+            job_options = [(f"{job['name']}（{job['result_count']}）", job["id"]) for job in jobs]
             self.compare_jobs_a.set_options(job_options)
             self.compare_jobs_b.set_options(job_options)
 

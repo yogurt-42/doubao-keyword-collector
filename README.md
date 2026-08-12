@@ -1,37 +1,76 @@
 # 豆包关键词资料采集器（开源版）
 
-这是一个本地运行的非官方关键词调研工具。它可以批量向豆包提问，展开每次回答的“搜索关键词 / 参考资料”思考区域，并保存其中的资料链接及所属平台。
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/yogurt-42/doubao-keyword-collector)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
+> 本地优先的非官方豆包关键词调研工具。
+> 批量提问、自动展开参考资料、提取链接与平台信息，存入本地 SQLite，支持筛选、导出 Excel、信源对比与长尾分析。
 
-## 主要功能
+---
 
-- 手工粘贴多个关键词，一行一个。
-- 导入 `.xlsx`、`.csv` 或 `.tsv` 关键词文件；自动识别“关键词、关键字、提问关键词、keyword、query”等表头。
-- 设置开始时间、每次采集间隔（秒）和最多尝试次数。
-- 默认原样发送用户输入或表格导入的关键词，不额外添加提问前后缀。
-- 同时提供原生 Windows 桌面管理界面和 Web 管理界面；桌面版不需要额外浏览器，服务端版可通过浏览器访问。
-- 每个豆包账号都在软件窗口顶部的独立页签中打开，并使用独立数据目录隔离 Cookie、缓存和登录状态。
-- 已打开的账号标签可以隐藏/显示：隐藏后标签栏不显示该账号，但账号仍保持激活，调度器仍可继续派发任务给它。
-- 软件启动时不会自动打开账号网页；只打开用户在“账号环境”中手动选择的账号。
-- 支持重命名和删除普通账号环境。
-- 在可用账号之间轮询分配提问；不同账号可按关键词启动间隔并行工作，同一账号一次只执行一个关键词。
-- 自动点击“新对话”，填写关键词，点击发送并等待回答完成。
-- 自动点击并展开“搜索 X 个关键词、参考 X 篇”和“展开更多”。
-- 只采集思考过程引用区的链接，不保存 AI 回答正文，也不会把正文中的普通链接混入结果。
-- 本地 SQLite 持久化：日期、提问关键词、资料名称、检索资料链接、检索资料平台、平台类型。
-- 参考资料每识别一条就立即保存并显示，不必等待整个任务结束。
-- 浏览器页面操作和完整采集任务均有超时保护，页面失去响应时会释放账号并按任务设置重试。
-- 当前任务与历史任务分开管理；历史任务支持查看结果、导出 Excel、重命名和删除。
-- 采集结果按任务、关键词、平台、账号、日期筛选，并导出为 Excel。
-- 采集结果页展示信源分布与占比（Top 20 + 其他），支持弹窗查看全部平台。
-- 信源对比功能：选择两个日期区间，对比新增、掉出和持续出现的平台。
-- 长尾信源分析：基于频次 / 广度 / 密度识别垂直长尾宝藏平台，通过气泡四象限图可视化，支持悬停查看、导出优质长尾 Excel 及一键复制平台限定词。
-- 平台信息管理：查看当前 URL → 平台名 → 类型映射库，并支持导入 Excel 扩展规则。
-- 历史任务页提供“同步平台信息”按钮，可按最新导入的平台规则回填旧记录的平台类型。
-- Web 管理端与桌面端能力对齐：历史任务、采集结果增强、长尾信源、信源对比、定时任务、平台信息管理。
-- 检测到验证码、操作频繁或疑似风控时暂停账号 30 分钟，等待人工处理；不绕过验证。
+## 📑 目录
 
-## 命令速查
+- [✨ 主要功能](#-主要功能)
+- [🖥️ 两种运行模式](#️-两种运行模式)
+- [🚀 快速开始](#-快速开始)
+- [📖 使用流程](#-使用流程)
+- [📁 项目结构](#-项目结构)
+- [🛡️ 数据与隐私](#️-数据与隐私)
+- [🔧 采集口径](#-采集口径)
+- [🧑‍💻 开发](#-开发)
+- [📄 许可证](#-许可证)
+
+---
+
+## ✨ 主要功能
+
+| 功能 | 说明 |
+| --- | --- |
+| 关键词导入 | 支持手工粘贴、`.xlsx` / `.csv` / `.tsv` 导入；自动识别常见表头 |
+| 多账号调度 | 多账号轮询分配，同一账号一次只执行一个关键词，不同账号可并行 |
+| 桌面端标签 | 每个账号独立 Qt WebEngine 页签；支持隐藏/显示标签，隐藏后仍保持激活 |
+| 自动采集 | 自动“新对话 → 填词 → 发送 → 等待回答 → 展开参考资料 → 保存链接” |
+| 实时保存 | 每识别一条参考资料立即写入 SQLite，不必等任务结束 |
+| 结果增强 | 信源分布 Top 20、信源对比（A/B 任务群）、长尾信源四象限分析 |
+| 平台规则库 | URL → 平台名 → 平台类型映射，支持 Excel 导入扩展 |
+| 历史任务 | 查看、导出 Excel、重命名、删除、同步平台信息 |
+| 风控保护 | 检测到验证码或疑似风控时暂停账号 30 分钟，不绕过验证 |
+
+---
+
+## 🖥️ 两种运行模式
+
+| 模式 | 命令 | 入口 | 适用场景 |
+| --- | --- | --- | --- |
+| 桌面版 | `doubao-keyword-collector` / `dkc` | `src/doubao2api/windows_entry.py` | 原生 Qt 窗口，推荐日常使用 |
+| 服务端 | `doubao-account-manager` | `src/doubao2api/__main__.py` | FastAPI + Web 管理端，浏览器访问 |
+
+服务端默认打开 `http://127.0.0.1:9090/admin`。
+
+---
+
+## 🚀 快速开始
+
+需要 **Python 3.10+**。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[desktop]"
+doubao-keyword-collector
+```
+
+Linux / macOS：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[desktop]"
+doubao-keyword-collector
+```
+
+### 命令速查
 
 ```powershell
 # 桌面版
@@ -39,58 +78,82 @@ doubao-keyword-collector
 # 或简写
 dkc
 
-# 服务端（默认打开 http://127.0.0.1:9090/admin）
+# 服务端
 doubao-account-manager
 ```
 
-## 快速开始
+---
 
-需要 Python 3.10 或更高版本。
+## 📖 使用流程
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[desktop]"
-cd /d "D:\ai-source-capturer\doubao-keyword-collector"
-doubao-keyword-collector
-```
+1. **账号登录**：进入“账号环境”，创建账号并在顶部页签中手动登录豆包。
+2. **创建任务**：在“新建采集”粘贴或导入关键词，设置采集间隔与尝试次数。
+3. **查看结果**：在“采集结果”筛选、查看信源分布，或导出 Excel。
+4. **深度分析**：使用“信源对比”比较两个任务群，或用“长尾信源”发现垂直平台。
 
-推荐操作顺序：
-
-1. 进入“账号环境”，创建账号；豆包会在软件顶部打开一个账号页签，在页签中手动登录。
-2. 回到“新建采集”，粘贴或导入关键词。
-3. 设置每次采集间隔（秒），选择账号后创建任务。
-4. 在“采集结果”中查询或导出 Excel。
-
-每个关键词会按以下顺序执行：
-
-1. 切换到选定账号的豆包页签并点击“新对话”。
-2. 把关键词写入豆包输入框并点击发送按钮。
-3. 等待本次回答完成。
-4. 展开“搜索 X 个关键词、参考 X 篇”及全部“展开更多”。
-5. 保存资料链接及链接对应的平台名称与平台类型，然后按设置的间隔继续下一个关键词。
-
-未开启定时任务时，第一个关键词会在创建任务后立即调度；设置的关键词间隔只用于后续关键词。任务列表会显示“正在发送、等待回答、读取参考资料、保存链接”等当前阶段。由于参考资料区由豆包在回答过程中生成，链接读取必须等待本次回答完成。
-
-关键词 Excel 可以使用如下最简格式：
+### 关键词 Excel 最简格式
 
 | 关键词 |
 | --- |
 | 新能源汽车销量 |
 | 家庭储能市场 |
 
-## 数据与隐私
+### 每个关键词的执行步骤
+
+1. 切换到选定账号页签，点击“新对话”。
+2. 写入关键词并点击发送。
+3. 等待本次回答完成。
+4. 展开“搜索 X 个关键词、参考 X 篇”及全部“展开更多”。
+5. 保存资料链接、平台名称与平台类型，按间隔继续下一个关键词。
+
+> 未开启定时任务时，第一个关键词创建后立即调度；关键词间隔仅用于后续关键词。
+
+---
+
+## 📁 项目结构
+
+```
+doubao-keyword-collector/
+├── src/doubao2api/
+│   ├── windows_entry.py          # 桌面 EXE 入口
+│   ├── __main__.py               # 服务端入口
+│   ├── desktop.py                # Qt 主窗口与账号标签管理
+│   ├── native_dashboard.py       # 原生管理面板
+│   ├── account_manager.py        # 账号池
+│   ├── research_scheduler.py     # 任务调度器
+│   ├── research_store.py         # SQLite 数据层
+│   ├── research_platforms.py     # 平台规则库
+│   ├── research_export.py        # Excel 导出
+│   ├── server.py                 # FastAPI 接口
+│   └── static/index.html         # Web 管理端
+├── tests/                        # pytest 测试
+├── README.md                     # 本文件
+├── AI-UNDERSTANDING.md           # AI 快速上下文
+├── UNDERSTANDING.md              # 详细技术参考
+└── ROADMAP.md                    # 开发路线图
+```
+
+---
+
+## 🛡️ 数据与隐私
 
 程序默认把浏览器环境和 `research.sqlite3` 数据库保存在：
 
-- Windows：`%LOCALAPPDATA%\DoubaoAccountManager`
-- Linux/macOS：`$XDG_DATA_HOME/doubao-account-manager` 或 `~/.local/share/doubao-account-manager`
+| 系统 | 默认路径 |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\DoubaoAccountManager` |
+| Linux / macOS | `$XDG_DATA_HOME/doubao-account-manager` 或 `~/.local/share/doubao-account-manager` |
 
-可通过 `DOUBAO_DATA_ROOT` 指定其他目录。桌面版不启动网页管理服务。项目保留的兼容接口默认只允许本机访问。程序不会把 Cookie、登录状态或机器信息发送给作者服务器。
+- 可通过 `DOUBAO_DATA_ROOT` 环境变量指定其他目录。
+- 桌面版不启动网页管理服务。
+- 兼容接口默认仅允许本机访问。
+- 程序不会把 Cookie、登录状态或机器信息发送给作者服务器。
 
-## 采集口径
+---
 
-资料链接只来自豆包页面中以下思考过程元素：
+## 🔧 采集口径
+
+资料链接只来自豆包页面思考过程中的以下元素：
 
 - `a[data-tool-call-item-id*="-result-"]`
 - `a[data-thinking-box-tool-call="true"]`
@@ -99,17 +162,9 @@ doubao-keyword-collector
 
 豆包网页结构更新后，定位规则可能需要随之调整。
 
-## 文字对话兼容接口
+---
 
-项目源码仍保留可选的本地 OpenAI Chat Completions 兼容接口。此接口不是桌面 EXE 的管理方式：
-
-```text
-POST /v1/chat/completions
-```
-
-图片、视频、音频不是当前项目目标，相应旧兼容路由会返回 `501`。
-
-## 开发
+## 🧑‍💻 开发
 
 ```powershell
 cd /d "D:\ai-source-capturer\doubao-keyword-collector"
@@ -119,6 +174,12 @@ ruff check .
 ruff format --check .
 ```
 
-## 许可证
+---
+
+## 📄 许可证
 
 重建源码使用 [MIT License](LICENSE)。第三方组件、网站内容和商标不因此获得重新许可。
+
+---
+
+> 本项目与字节跳动 / 豆包无官方关系，仅用于本地关键词调研与学习。
