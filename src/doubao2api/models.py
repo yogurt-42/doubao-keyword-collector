@@ -149,3 +149,36 @@ class ResearchScheduleUpdateRequest(BaseModel):
 
 class ResearchScheduleToggleRequest(BaseModel):
     enabled: bool
+
+
+class ResearchJobRenameRequest(BaseModel):
+    name: str
+
+
+class ResearchResultsSyncRequest(BaseModel):
+    batch_size: int | None = Field(default=10000, ge=1, le=100000)
+
+
+class ResearchResultsSourceComparisonRequest(BaseModel):
+    date_a_from: str
+    date_a_to: str
+    date_b_from: str
+    date_b_to: str
+    job_id: str = ""
+    keywords: list[str] = Field(default_factory=list)
+    platform: str = ""
+    account_id: str = ""
+
+
+class ResearchResultsLongTailRequest(BaseModel):
+    job_id: str = ""
+    keywords: list[str] = Field(default_factory=list)
+    platform: str = ""
+    account_id: str = ""
+    date_from: str = ""
+    date_to: str = ""
+    split_mode: str = "threshold"
+    breadth_threshold: int = 3
+    freq_threshold: int = 20
+    density_threshold: float = 5.0
+    noise_density_threshold: float = 20.0

@@ -61,3 +61,54 @@ def build_results_workbook(rows: list[dict[str, Any]]) -> bytes:
     workbook.save(output)
     workbook.close()
     return output.getvalue()
+
+
+def build_long_tail_workbook(
+    targets: list[dict[str, Any]],
+    params: dict[str, Any],
+    summary: dict[str, Any],
+) -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "长尾信源推荐"
+    sheet.append(["平台", "频次", "广度", "密度", "平台类型", "代表链接", "关键词示例", "象限分类"])
+    for item in targets:
+        sheet.append(
+            [
+                item.get("platform", ""),
+                item.get("freq", 0),
+                item.get("breadth", 0),
+                round(item.get("density", 0.0), 2),
+                item.get("type", ""),
+                item.get("representative_link", ""),
+                ", ".join(item.get("keywords_sample", [])[:5]),
+                item.get("quadrant", ""),
+            ]
+        )
+
+    header_fill = PatternFill("solid", fgColor="183153")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    sheet.column_dimensions["A"].width = 28
+    sheet.column_dimensions["B"].width = 10
+    sheet.column_dimensions["C"].width = 10
+    sheet.column_dimensions["D"].width = 10
+    sheet.column_dimensions["E"].width = 20
+    sheet.column_dimensions["F"].width = 60
+    sheet.column_dimensions["G"].width = 40
+    sheet.column_dimensions["H"].width = 24
+    for row in sheet.iter_rows(min_row=2):
+        if row[5].value:
+            row[5].hyperlink = row[5].value
+            row[5].style = "Hyperlink"
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+    return output.getvalue()

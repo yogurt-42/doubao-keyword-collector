@@ -11,12 +11,14 @@ import webbrowser
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from io import BytesIO
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from openpyxl import load_workbook
 
 from .account_manager import BrowserAccountPool, normalize_account_id
 from .browser_client import BrowserUnavailableError, LoginRequiredError
@@ -33,14 +35,19 @@ from .models import (
     ImageGenerationRequest,
     ManualCookieImportRequest,
     ResearchJobCreateRequest,
+    ResearchJobRenameRequest,
     ResearchJobTemplateCreateRequest,
     ResearchJobTemplateUpdateRequest,
+    ResearchResultsLongTailRequest,
+    ResearchResultsSourceComparisonRequest,
+    ResearchResultsSyncRequest,
     ResearchScheduleCreateRequest,
     ResearchScheduleToggleRequest,
     ResearchScheduleUpdateRequest,
     VideoGenerationRequest,
 )
-from .research_export import build_results_workbook
+from .platform_editor import PLATFORM_CATEGORIES, add_entries, all_entries
+from .research_export import build_long_tail_workbook, build_results_workbook
 from .research_import import normalize_keywords, parse_keyword_file
 from .research_scheduler import ResearchScheduler
 from .research_store import ResearchStore
@@ -559,6 +566,26 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="采集任务不存在") from exc
 
+    @app.delete("/admin/api/research/jobs/{job_id}")
+    async def admin_delete_research_job(job_id: str) -> dict[str, Any]:
+        try:
+            research_store.delete_job(job_id)
+            return {"deleted": True, "job_id": job_id}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="采集任务不存在") from exc
+
+    @app.post("/admin/api/research/jobs/{job_id}/rename")
+    async def admin_rename_research_job(
+        job_id: str,
+        body: ResearchJobRenameRequest,
+    ) -> dict[str, Any]:
+        try:
+            return research_store.rename_job(job_id, body.name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="采集任务不存在") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     # ------------------------------------------------------------------
     # Research job templates
     # ------------------------------------------------------------------
@@ -717,6 +744,7 @@ def create_app(
     async def admin_research_results(
         job_id: str = "",
         keyword: str = "",
+        keywords: Annotated[list[str] | None, Query()] = None,
         platform: str = "",
         account_id: str = "",
         date_from: str = "",
@@ -724,9 +752,10 @@ def create_app(
         limit: int = 500,
         offset: int = 0,
     ) -> dict[str, Any]:
+        filter_keywords = keywords or []
         filters = {
             "job_id": job_id,
-            "keyword": keyword,
+            "keyword": filter_keywords if filter_keywords else keyword,
             "platform": platform,
             "account_id": account_id,
             "date_from": date_from,
@@ -742,6 +771,8 @@ def create_app(
             "total": dashboard["summary"]["total"],
             "platforms": research_store.platforms(),
             "accounts": research_store.result_accounts(),
+            "keywords": research_store.result_keywords(),
+            "jobs": research_store.result_jobs(),
             "dashboard": dashboard,
         }
 
@@ -749,14 +780,16 @@ def create_app(
     async def admin_export_research_results(
         job_id: str = "",
         keyword: str = "",
+        keywords: Annotated[list[str] | None, Query()] = None,
         platform: str = "",
         account_id: str = "",
         date_from: str = "",
         date_to: str = "",
     ) -> Response:
+        filter_keywords = keywords or []
         rows = research_store.list_results(
             job_id=job_id,
-            keyword=keyword,
+            keyword=filter_keywords if filter_keywords else keyword,
             platform=platform,
             account_id=account_id,
             date_from=date_from,
@@ -771,6 +804,140 @@ def create_app(
                 "Content-Disposition": ('attachment; filename="doubao-thinking-references.xlsx"')
             },
         )
+
+    @app.post("/admin/api/research/results/sync-platform-info")
+    async def admin_sync_platform_info(
+        body: ResearchResultsSyncRequest | None = None,
+    ) -> dict[str, Any]:
+        updated = research_store.sync_platform_info(
+            batch_size=(body.batch_size if body else 10000),
+        )
+        return {"updated": updated}
+
+    @app.get("/admin/api/research/results/keywords")
+    async def admin_result_keywords() -> dict[str, Any]:
+        return {"keywords": research_store.result_keywords()}
+
+    @app.get("/admin/api/research/results/jobs")
+    async def admin_result_jobs() -> dict[str, Any]:
+        return {"jobs": research_store.result_jobs()}
+
+    @app.post("/admin/api/research/results/source-comparison")
+    async def admin_source_comparison(
+        body: ResearchResultsSourceComparisonRequest,
+    ) -> dict[str, Any]:
+        return research_store.source_comparison(
+            date_a_from=body.date_a_from,
+            date_a_to=body.date_a_to,
+            date_b_from=body.date_b_from,
+            date_b_to=body.date_b_to,
+            job_id=body.job_id,
+            keyword=body.keywords,
+            platform=body.platform,
+            account_id=body.account_id,
+        )
+
+    @app.post("/admin/api/research/results/long-tail-analysis")
+    async def admin_long_tail_analysis(
+        body: ResearchResultsLongTailRequest,
+    ) -> dict[str, Any]:
+        return research_store.long_tail_analysis(
+            job_id=body.job_id,
+            keyword=body.keywords,
+            platform=body.platform,
+            account_id=body.account_id,
+            date_from=body.date_from,
+            date_to=body.date_to,
+            split_mode=body.split_mode,
+            breadth_threshold=body.breadth_threshold,
+            freq_threshold=body.freq_threshold,
+            density_threshold=body.density_threshold,
+            noise_density_threshold=body.noise_density_threshold,
+        )
+
+    @app.post("/admin/api/research/results/long-tail/export.xlsx")
+    async def admin_export_long_tail(
+        body: ResearchResultsLongTailRequest,
+    ) -> Response:
+        analysis = research_store.long_tail_analysis(
+            job_id=body.job_id,
+            keyword=body.keywords,
+            platform=body.platform,
+            account_id=body.account_id,
+            date_from=body.date_from,
+            date_to=body.date_to,
+            split_mode=body.split_mode,
+            breadth_threshold=body.breadth_threshold,
+            freq_threshold=body.freq_threshold,
+            density_threshold=body.density_threshold,
+            noise_density_threshold=body.noise_density_threshold,
+        )
+        content = build_long_tail_workbook(
+            analysis.get("target_long_tail", []),
+            analysis.get("params", {}),
+            analysis.get("summary", {}),
+        )
+        return Response(
+            content,
+            media_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            headers={"Content-Disposition": ('attachment; filename="long-tail-platforms.xlsx"')},
+        )
+
+    @app.get("/admin/api/research/platforms")
+    async def admin_research_platforms() -> dict[str, Any]:
+        return {
+            "entries": all_entries(),
+            "categories": list(PLATFORM_CATEGORIES),
+        }
+
+    @app.post("/admin/api/research/platforms/import")
+    async def admin_import_research_platforms(
+        file: Annotated[UploadFile, File()],
+    ) -> dict[str, Any]:
+        data = await file.read()
+        if len(data) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="平台规则文件不能超过 20 MB")
+        try:
+            workbook = load_workbook(filename=BytesIO(data), read_only=True)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=f"无法解析 Excel: {exc}") from exc
+
+        sheet = workbook.active
+        if sheet is None:
+            raise HTTPException(status_code=400, detail="Excel 中没有工作表")
+
+        headers = [
+            str(cell.value or "").strip() for cell in next(sheet.iter_rows(min_row=1, max_row=1))
+        ]
+        url_col = next(
+            (i for i, h in enumerate(headers) if h in {"url", "域名", "URL"}),
+            None,
+        )
+        name_col = next(
+            (i for i, h in enumerate(headers) if h in {"平台名", "平台名称", "name"}),
+            None,
+        )
+        category_col = next(
+            (i for i, h in enumerate(headers) if h in {"平台类型", "类型", "category"}),
+            None,
+        )
+        if url_col is None or name_col is None or category_col is None:
+            workbook.close()
+            raise HTTPException(
+                status_code=400,
+                detail="Excel 表头必须包含 URL/域名、平台名/平台名称、平台类型/类型 列",
+            )
+
+        rows: list[dict[str, str]] = []
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            url = str(row[url_col] or "").strip()
+            name = str(row[name_col] or "").strip()
+            category = str(row[category_col] or "").strip()
+            if url and name and category:
+                rows.append({"url": url, "平台名": name, "平台类型": category})
+        workbook.close()
+
+        return add_entries(rows)
 
     @app.post("/admin/api/accounts")
     async def admin_start_account(body: AccountProvisionRequest) -> dict[str, Any]:

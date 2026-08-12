@@ -410,6 +410,7 @@ class ResearchStore:
             )
             if result.rowcount == 0:
                 raise KeyError(job_id)
+            connection.commit()
             return self.get_job(job_id)
 
     def sync_platform_info(self, batch_size: int = 10000) -> int:
@@ -1138,7 +1139,7 @@ class ResearchStore:
         if date_to:
             conditions.append("r.collected_date <= ?")
             params.append(date_to)
-        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        where = "WHERE 1=1" if not conditions else f"WHERE {' AND '.join(conditions)}"
         return where, params
 
     def list_results(

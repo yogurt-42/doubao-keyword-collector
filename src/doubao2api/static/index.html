@@ -71,6 +71,7 @@
     textarea { resize: vertical; min-height: 120px; }
     .row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
     .row.three { grid-template-columns: repeat(3,minmax(0,1fr)); }
+    .row.four { grid-template-columns: repeat(4,minmax(0,1fr)); }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
     .btn {
       border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px;
@@ -125,6 +126,19 @@
     }
     details { margin-top: 12px; }
     summary { cursor: pointer; color: var(--blue); font-size: 12px; }
+    .multiselect { position: relative; margin-top: 0; }
+    .multiselect summary { list-style: none; color: var(--ink); }
+    .multiselect summary::-webkit-details-marker { display: none; }
+    .multiselect-menu { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; min-width: 240px; max-height: 320px; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: var(--shadow); }
+    .multiselect-menu .checks { max-height: 240px; overflow: auto; }
+    .multiselect-menu .check { display: flex; width: 100%; margin-bottom: 6px; }
+    #donutChart { display: block; }
+    body.focus-mode header, body.focus-mode nav, body.focus-mode .results-filters,
+    body.focus-mode .results-metrics, body.focus-mode .results-distribution { display: none; }
+    body.focus-mode .shell { padding: 0; max-width: 100%; }
+    body.focus-mode #results { height: 100vh; display: flex; flex-direction: column; padding: 12px; }
+    body.focus-mode #results > .panel:last-child { flex: 1; display: flex; flex-direction: column; }
+    body.focus-mode #results > .panel:last-child .tablewrap { flex: 1; }
     @media (max-width: 820px) {
       .grid, .row, .row.three, .toolbar { grid-template-columns: 1fr; }
       header { align-items: flex-start; }
@@ -150,7 +164,12 @@
     <nav>
       <button class="tab active" data-page="collect">新建采集</button>
       <button class="tab" data-page="accounts">账号环境</button>
+      <button class="tab" data-page="history">历史任务</button>
       <button class="tab" data-page="results">采集结果</button>
+      <button class="tab" data-page="longtail">长尾信源</button>
+      <button class="tab" data-page="comparison">信源对比</button>
+      <button class="tab" data-page="schedules">定时任务</button>
+      <button class="tab" data-page="platforms">平台信息</button>
     </nav>
 
     <main id="collect" class="page active">
@@ -210,19 +229,266 @@
       <div class="panel"><div id="accountList" class="list"><div class="empty">正在读取账号…</div></div></div>
     </main>
 
-    <main id="results" class="page">
+    <main id="history" class="page">
       <div class="panel">
+        <div class="cardhead" style="margin-bottom:14px">
+          <div><h2>历史任务</h2><p class="hint">已结束的任务：已完成、失败、已取消。可单独导出结果、重命名、删除或同步平台类型。</p></div>
+          <div class="actions">
+            <button class="btn" onclick="syncPlatformInfo()">同步平台信息</button>
+            <button class="btn" onclick="loadHistory()">刷新</button>
+          </div>
+        </div>
+        <div id="historyList" class="list"><div class="empty">暂无历史任务</div></div>
+      </div>
+    </main>
+
+    <main id="results" class="page">
+      <div class="panel results-filters">
         <h2>思考过程资料链接</h2>
         <p class="hint">这里只展示豆包“搜索关键词 / 参考资料”展开区中的链接，不包含 AI 最终回答正文里的链接。</p>
-        <div class="toolbar">
-          <div><label for="filterKeyword">关键词筛选</label><input id="filterKeyword" placeholder="输入部分关键词"></div>
+        <div class="row three">
+          <div><label for="filterJob">任务筛选</label><select id="filterJob"><option value="">全部任务</option></select></div>
+          <div><label for="filterAccount">账号筛选</label><select id="filterAccount"><option value="">全部账号</option></select></div>
           <div><label for="filterPlatform">平台筛选</label><select id="filterPlatform"><option value="">全部平台</option></select></div>
-          <div class="actions"><button class="btn" id="searchResults">查询</button><button class="btn primary" id="exportResults">导出 Excel</button></div>
+        </div>
+        <div class="row three" style="margin-top:12px">
+          <div>
+            <label>关键词筛选</label>
+            <details class="multiselect" id="keywordFilterBox">
+              <summary class="btn" id="keywordFilterSummary">全部关键词</summary>
+              <div class="multiselect-menu">
+                <div class="actions">
+                  <button class="btn small" onclick="selectAllKeywords(true)">全选</button>
+                  <button class="btn small" onclick="selectAllKeywords(false)">清空</button>
+                </div>
+                <div id="keywordFilterList" class="checks"></div>
+              </div>
+            </details>
+          </div>
+          <div><label for="filterDateFrom">开始日期</label><input id="filterDateFrom" type="date"></div>
+          <div><label for="filterDateTo">结束日期</label><input id="filterDateTo" type="date"></div>
+        </div>
+        <div class="actions" style="margin-top:14px">
+          <button class="btn" id="searchResults">查询</button>
+          <button class="btn primary" id="exportResults">导出 Excel</button>
+          <button class="btn" id="focusBtn">沉浸查看表格</button>
+        </div>
+      </div>
+
+      <div class="panel results-metrics">
+        <div class="stats" style="grid-template-columns: repeat(4, minmax(0,1fr))">
+          <div class="stat"><strong id="metricTotal">0</strong><span>资料数</span></div>
+          <div class="stat"><strong id="metricJobs">0</strong><span>关联任务数</span></div>
+          <div class="stat"><strong id="metricKeywords">0</strong><span>关键词数</span></div>
+          <div class="stat"><strong id="metricPlatforms">0</strong><span>来源平台数</span></div>
+        </div>
+      </div>
+
+      <div class="panel results-distribution">
+        <h2>信源分布</h2>
+        <div style="display:grid;grid-template-columns:220px 1fr;gap:20px;align-items:start">
+          <svg id="donutChart" viewBox="0 0 100 100" style="width:220px;height:220px"></svg>
+          <div class="tablewrap">
+            <table>
+              <thead><tr><th>平台</th><th>类型</th><th>数量</th><th>占比</th></tr></thead>
+              <tbody id="platformRows"><tr><td colspan="4" class="empty">暂无数据</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>日期</th><th>提问关键词</th><th>资料名称</th><th>检索资料链接</th><th>检索资料平台</th><th>平台类型</th></tr></thead>
+            <tbody id="resultRows"><tr><td colspan="6" class="empty">暂无结果</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <main id="longtail" class="page">
+      <div class="panel">
+        <h2>长尾信源分析</h2>
+        <p class="hint">按频次、广度、密度识别垂直长尾宝藏平台。气泡大小代表密度，颜色代表象限分类。</p>
+        <div class="row three">
+          <div><label for="ltJob">任务</label><select id="ltJob"><option value="">全部任务</option></select></div>
+          <div><label for="ltAccount">账号</label><select id="ltAccount"><option value="">全部账号</option></select></div>
+          <div><label for="ltPlatform">平台</label><input id="ltPlatform" placeholder="可选，输入平台域名"></div>
+        </div>
+        <div class="row three" style="margin-top:12px">
+          <div><label for="ltDateFrom">开始日期</label><input id="ltDateFrom" type="date"></div>
+          <div><label for="ltDateTo">结束日期</label><input id="ltDateTo" type="date"></div>
+          <div><label for="ltSplitMode">分类方式</label><select id="ltSplitMode"><option value="threshold">阈值</option><option value="median">中位数</option></select></div>
+        </div>
+        <div class="row four" style="margin-top:12px">
+          <div><label for="ltBreadth">广度阈值</label><input id="ltBreadth" type="number" value="3" min="1"></div>
+          <div><label for="ltFreq">频次阈值</label><input id="ltFreq" type="number" value="20" min="1"></div>
+          <div><label for="ltDensity">密度阈值</label><input id="ltDensity" type="number" value="5" step="0.1"></div>
+          <div><label for="ltNoise">噪声密度阈值</label><input id="ltNoise" type="number" value="20" step="0.1"></div>
+        </div>
+        <div class="actions" style="margin-top:14px">
+          <button class="btn primary" id="analyzeLongTail">分析</button>
+          <button class="btn" id="exportLongTail">导出 Excel</button>
+          <button class="btn" id="copyKeywords">复制平台限定词</button>
+          <label class="check"><input type="checkbox" id="ltLogX"> X 轴对数</label>
+          <label class="check"><input type="checkbox" id="ltLogY"> Y 轴对数</label>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div id="ltSummary" class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:0"></div>
+      </div>
+
+      <div class="panel">
+        <h2>气泡四象限图</h2>
+        <div style="overflow:auto">
+          <svg id="bubbleChart" viewBox="0 0 600 400" style="width:100%;max-width:720px;height:auto"></svg>
+        </div>
+        <div id="ltLegend" class="checks" style="margin-top:10px"></div>
+      </div>
+
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="panel">
+          <h2>长尾推荐</h2>
+          <div class="tablewrap">
+            <table>
+              <thead><tr><th>平台</th><th>频次</th><th>广度</th><th>密度</th><th>类型</th><th>代表链接</th></tr></thead>
+              <tbody id="ltTargetRows"><tr><td colspan="6" class="empty">点击分析后查看</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>象限清单</h2>
+          <div class="tablewrap">
+            <table>
+              <thead><tr><th>平台</th><th>频次</th><th>广度</th><th>密度</th><th>象限</th></tr></thead>
+              <tbody id="ltQuadrantRows"><tr><td colspan="5" class="empty">点击分析后查看</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <main id="comparison" class="page">
+      <div class="panel">
+        <h2>信源对比</h2>
+        <p class="hint">选择 A、B 两个日期区间，分析平台来源的变化情况。</p>
+        <div class="row three">
+          <div><label for="cmpJob">任务</label><select id="cmpJob"><option value="">全部任务</option></select></div>
+          <div><label for="cmpAccount">账号</label><select id="cmpAccount"><option value="">全部账号</option></select></div>
+          <div><label for="cmpPlatform">平台</label><input id="cmpPlatform" placeholder="可选"></div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <div class="panel" style="margin-top:0">
+            <strong>A 区间</strong>
+            <div class="row">
+              <div><label for="cmpDateAFrom">开始</label><input id="cmpDateAFrom" type="date"></div>
+              <div><label for="cmpDateATo">结束</label><input id="cmpDateATo" type="date"></div>
+            </div>
+          </div>
+          <div class="panel" style="margin-top:0">
+            <strong>B 区间</strong>
+            <div class="row">
+              <div><label for="cmpDateBFrom">开始</label><input id="cmpDateBFrom" type="date"></div>
+              <div><label for="cmpDateBTo">结束</label><input id="cmpDateBTo" type="date"></div>
+            </div>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:14px">
+          <button class="btn primary" id="compareSources">开始对比</button>
+        </div>
+      </div>
+
+      <div id="comparisonResult" style="display:none">
+        <div class="panel">
+          <div class="stats" style="grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:0">
+            <div class="stat"><strong id="cmpTotalA">0</strong><span>A 区间资料数</span></div>
+            <div class="stat"><strong id="cmpTotalB">0</strong><span>B 区间资料数</span></div>
+            <div class="stat"><strong id="cmpAdded">0</strong><span>新增平台</span></div>
+            <div class="stat"><strong id="cmpRemoved">0</strong><span>掉出平台</span></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>平台变化明细</h2>
+          <div class="tablewrap">
+            <table>
+              <thead><tr><th>平台</th><th>状态</th><th>A 区间数量</th><th>B 区间数量</th><th>A 区间占比</th><th>B 区间占比</th><th>变化量</th><th>变化率</th></tr></thead>
+              <tbody id="comparisonRows"><tr><td colspan="8" class="empty">请选择区间后点击对比</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <main id="schedules" class="page">
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="panel">
+          <h2>任务模板</h2>
+          <p class="hint">保存常用的关键词和提问配置，供定时计划复用。</p>
+          <div><label for="tplName">模板名称</label><input id="tplName" placeholder="例如：每日品牌词监控"></div>
+          <div style="margin-top:10px"><label for="tplKeywords">关键词（每行一个）</label><textarea id="tplKeywords" style="min-height:80px"></textarea></div>
+          <div class="row three" style="margin-top:10px">
+            <div><label for="tplInterval">间隔（秒）</label><input id="tplInterval" type="number" value="10" min="1"></div>
+            <div><label for="tplCooldown">账号冷却（秒）</label><input id="tplCooldown" type="number" value="0" min="0"></div>
+            <div><label for="tplAttempts">尝试次数</label><select id="tplAttempts"><option>1</option><option selected>2</option><option>3</option></select></div>
+          </div>
+          <div style="margin-top:10px"><label for="tplPrompt">提问模板</label><input id="tplPrompt" value="{keyword}"></div>
+          <div class="actions">
+            <button class="btn primary" id="saveTemplate">保存模板</button>
+            <button class="btn" id="resetTemplateForm" style="display:none">取消编辑</button>
+          </div>
+          <div class="tablewrap" style="margin-top:16px">
+            <table>
+              <thead><tr><th>名称</th><th>关键词数</th><th>间隔</th><th>操作</th></tr></thead>
+              <tbody id="templateRows"><tr><td colspan="4" class="empty">暂无模板</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>触发计划</h2>
+          <p class="hint">选择模板并按间隔/一次性/每日定时自动生成采集任务。</p>
+          <div class="row">
+            <div><label for="schName">计划名称</label><input id="schName" placeholder="例如：早 9 点采集"></div>
+            <div><label for="schTemplate">选择模板</label><select id="schTemplate"><option value="">请选择</option></select></div>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <div><label for="schType">触发类型</label><select id="schType">
+              <option value="interval">按间隔（秒）</option>
+              <option value="once">一次性</option>
+              <option value="daily">每日</option>
+            </select></div>
+            <div><label for="schValue">触发值</label><input id="schValue" placeholder="秒数 / ISO 时间 / HH:MM"></div>
+          </div>
+          <div class="actions">
+            <button class="btn primary" id="saveSchedule">创建计划</button>
+            <button class="btn" id="resetScheduleForm" style="display:none">取消编辑</button>
+          </div>
+          <div class="tablewrap" style="margin-top:16px">
+            <table>
+              <thead><tr><th>名称</th><th>模板</th><th>类型</th><th>下次触发</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody id="scheduleRows"><tr><td colspan="6" class="empty">暂无计划</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <main id="platforms" class="page">
+      <div class="panel">
+        <div class="cardhead" style="margin-bottom:14px">
+          <div><h2>平台信息</h2><p class="hint">当前平台规则库。导入 Excel 可扩展规则，新规则会同步影响历史结果的平台类型。</p></div>
+          <div class="actions">
+            <div class="filebox"><input id="platformFile" type="file" accept=".xlsx"><span id="platformFileState">导入 .xlsx（需含 URL/域名、平台名、平台类型列）</span></div>
+            <button class="btn" onclick="loadPlatforms()">刷新</button>
+          </div>
         </div>
         <div class="tablewrap">
           <table>
-            <thead><tr><th>日期</th><th>提问关键词</th><th>检索资料链接</th><th>检索资料平台</th></tr></thead>
-            <tbody id="resultRows"><tr><td colspan="4" class="empty">暂无结果</td></tr></tbody>
+            <thead><tr><th>域名</th><th>平台名</th><th>平台类型</th></tr></thead>
+            <tbody id="platformRows"><tr><td colspan="3" class="empty">正在加载…</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -259,7 +525,12 @@
     document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach(item => item.classList.toggle('active', item === tab));
       document.querySelectorAll('.page').forEach(page => page.classList.toggle('active', page.id === tab.dataset.page));
+      if (tab.dataset.page === 'history') loadHistory();
       if (tab.dataset.page === 'results') loadResults();
+      if (tab.dataset.page === 'longtail') loadLongTailOptions();
+      if (tab.dataset.page === 'comparison') loadComparisonOptions();
+      if (tab.dataset.page === 'schedules') loadSchedules();
+      if (tab.dataset.page === 'platforms') loadPlatforms();
       if (tab.dataset.page === 'accounts') loadAccounts();
     }));
 
@@ -378,33 +649,539 @@
       catch (error) { toast(error.message, true); }
     };
 
+    async function loadHistory() {
+      try {
+        const data = await api('/admin/api/research/jobs');
+        const finished = data.jobs.filter(job => ['completed','failed','cancelled'].includes(job.status));
+        $('historyList').innerHTML = finished.map(job => `
+          <div class="card" data-job-id="${escapeHtml(job.id)}">
+            <div class="cardhead">
+              <div><div class="title" id="history-name-${escapeHtml(job.id)}">${escapeHtml(job.name || '未命名任务')}</div>
+                <div class="meta">${job.total} 个关键词 · 已完成 ${job.completed} · 失败 ${job.failed} · ${escapeHtml(new Date(job.created_at).toLocaleString())}</div>
+              </div>
+              <span class="badge ${job.status}">${statusText(job.status)}</span>
+            </div>
+            <div class="actions">
+              <button class="btn small primary" onclick="viewHistoryResults('${escapeHtml(job.id)}')">查看结果</button>
+              <button class="btn small" onclick="exportJob('${escapeHtml(job.id)}')">导出 Excel</button>
+              <button class="btn small" onclick="startRenameJob('${escapeHtml(job.id)}')">重命名</button>
+              <button class="btn small danger" onclick="deleteJob('${escapeHtml(job.id)}')">删除</button>
+            </div>
+          </div>`).join('') || '<div class="empty">暂无历史任务</div>';
+      } catch (error) { toast(error.message, true); }
+    }
+    window.viewHistoryResults = jobId => {
+      $('filterJob').value = jobId;
+      document.querySelectorAll('.tab').forEach(item => item.classList.toggle('active', item.dataset.page === 'results'));
+      document.querySelectorAll('.page').forEach(page => page.classList.toggle('active', page.id === 'results'));
+      loadResults();
+    };
+    window.exportJob = jobId => {
+      window.location.href = '/admin/api/research/results/export.xlsx?job_id=' + encodeURIComponent(jobId);
+    };
+    window.startRenameJob = jobId => {
+      const current = document.getElementById('history-name-' + jobId).textContent;
+      const name = prompt('请输入新的任务名称：', current);
+      if (!name || name === current) return;
+      renameJob(jobId, name);
+    };
+    window.renameJob = async (jobId, name) => {
+      try {
+        await postJSON(`/admin/api/research/jobs/${jobId}/rename`, {name});
+        toast('任务已重命名'); await loadHistory(); await loadJobs();
+      } catch (error) { toast(error.message, true); }
+    };
+    window.deleteJob = async jobId => {
+      if (!confirm('确定删除该任务及其所有结果？此操作不可恢复。')) return;
+      try {
+        await api(`/admin/api/research/jobs/${jobId}`, {method: 'DELETE'});
+        toast('任务已删除'); await loadHistory(); await loadJobs();
+      } catch (error) { toast(error.message, true); }
+    };
+    window.syncPlatformInfo = async () => {
+      try {
+        const data = await postJSON('/admin/api/research/results/sync-platform-info', {});
+        toast(`已同步 ${data.updated} 条记录的平台信息`); await loadHistory();
+      } catch (error) { toast(error.message, true); }
+    };
+
     async function loadResults() {
       const query = new URLSearchParams();
-      if ($('filterKeyword').value.trim()) query.set('keyword', $('filterKeyword').value.trim());
+      if ($('filterJob').value) query.set('job_id', $('filterJob').value);
+      const selectedKeywords = getSelectedKeywords();
+      selectedKeywords.forEach(value => query.append('keywords', value));
       if ($('filterPlatform').value) query.set('platform', $('filterPlatform').value);
+      if ($('filterAccount').value) query.set('account_id', $('filterAccount').value);
+      if ($('filterDateFrom').value) query.set('date_from', $('filterDateFrom').value);
+      if ($('filterDateTo').value) query.set('date_to', $('filterDateTo').value);
       query.set('limit','1000');
       try {
         const data = await api('/admin/api/research/results?' + query);
         $('resultTotal').textContent = data.total;
-        const previous = $('filterPlatform').value;
-        $('filterPlatform').innerHTML = '<option value="">全部平台</option>' + data.platforms.map(value =>
-          `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
-        $('filterPlatform').value = previous;
-        $('resultRows').innerHTML = data.items.map(item => `<tr>
-          <td>${escapeHtml(item.collected_date)}</td>
-          <td>${escapeHtml(item.keyword)}</td>
-          <td><a href="${escapeHtml(item.link)}" target="_blank" rel="noreferrer">${escapeHtml(item.link)}</a></td>
-          <td>${escapeHtml(item.platform)}</td>
-        </tr>`).join('') || '<tr><td colspan="4" class="empty">暂无结果</td></tr>';
+        $('metricTotal').textContent = data.dashboard?.summary?.total ?? data.total;
+        $('metricJobs').textContent = data.dashboard?.summary?.jobs ?? 0;
+        $('metricKeywords').textContent = data.dashboard?.summary?.keywords ?? 0;
+        $('metricPlatforms').textContent = data.dashboard?.summary?.platforms ?? 0;
+
+        preserveSelect('filterJob', data.jobs, 'id', 'name', '全部任务');
+        preserveSelect('filterAccount', data.accounts, null, null, '全部账号');
+        preserveSelect('filterPlatform', data.platforms, null, null, '全部平台');
+        renderKeywordFilter(data.keywords);
+
+        const platformRows = (data.dashboard?.platforms || []).slice(0, 20);
+        drawDonut(platformRows, data.total);
+        $('platformRows').innerHTML = platformRows.map(item => `
+          <tr>
+            <td>${escapeHtml(item.platform)}</td>
+            <td>${escapeHtml(item.type || '-')}</td>
+            <td>${item.count}</td>
+            <td>${data.total ? (item.count / data.total * 100).toFixed(1) : 0}%</td>
+          </tr>`).join('') || '<tr><td colspan="4" class="empty">暂无数据</td></tr>';
+
+        $('resultRows').innerHTML = data.items.map(item => `
+          <tr>
+            <td>${escapeHtml(item.collected_date)}</td>
+            <td>${escapeHtml(item.keyword)}</td>
+            <td>${escapeHtml(item.title || '')}</td>
+            <td><a href="${escapeHtml(item.link)}" target="_blank" rel="noreferrer">${escapeHtml(item.link)}</a></td>
+            <td>${escapeHtml(item.platform)}</td>
+            <td>${escapeHtml(item.platform_type || '-')}</td>
+          </tr>`).join('') || '<tr><td colspan="6" class="empty">暂无结果</td></tr>';
       } catch (error) { toast(error.message, true); }
     }
+
+    function preserveSelect(id, values, valueKey, labelKey, defaultLabel) {
+      const select = $(id);
+      const previous = select.value;
+      let options = `<option value="">${defaultLabel}</option>`;
+      if (valueKey) {
+        options += values.map(item => `<option value="${escapeHtml(item[valueKey])}">${escapeHtml(item[labelKey] || item[valueKey])}</option>`).join('');
+      } else {
+        options += values.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+      }
+      select.innerHTML = options;
+      if ([...select.options].some(option => option.value === previous)) select.value = previous;
+    }
+
+    function renderKeywordFilter(values) {
+      const selected = getSelectedKeywords();
+      $('keywordFilterList').innerHTML = values.map(value => `
+        <label class="check">
+          <input type="checkbox" value="${escapeHtml(value)}" ${selected.includes(value) ? 'checked' : ''}>
+          ${escapeHtml(value)}
+        </label>`).join('') || '<span class="meta">暂无关键词</span>';
+      updateKeywordSummary();
+    }
+    window.selectAllKeywords = checked => {
+      $('keywordFilterList').querySelectorAll('input').forEach(input => input.checked = checked);
+      updateKeywordSummary();
+    };
+    function getSelectedKeywords() {
+      return [...$('keywordFilterList').querySelectorAll('input:checked')].map(input => input.value);
+    }
+    function updateKeywordSummary() {
+      const n = getSelectedKeywords().length;
+      $('keywordFilterSummary').textContent = n ? `已选 ${n} 个关键词` : '全部关键词';
+    }
+    $('keywordFilterList').addEventListener('change', updateKeywordSummary);
+
+    const DONUT_COLORS = ['#5b5ce2','#22a06b','#e69a2d','#3b82c4','#b15ac7','#de5267','#14b8a6','#f59e0b'];
+    function drawDonut(rows, total) {
+      const svg = $('donutChart');
+      if (!total || !rows.length) {
+        svg.innerHTML = '<text x="50" y="50" text-anchor="middle" fill="#728097" font-size="8">暂无数据</text>';
+        return;
+      }
+      let angle = -Math.PI / 2, html = '';
+      const cx = 50, cy = 50, r = 40;
+      rows.forEach((row, i) => {
+        const share = row.count / total;
+        const a = share * 2 * Math.PI;
+        const x1 = cx + r * Math.cos(angle), y1 = cy + r * Math.sin(angle);
+        const x2 = cx + r * Math.cos(angle + a), y2 = cy + r * Math.sin(angle + a);
+        const large = a > Math.PI ? 1 : 0;
+        html += `<path d="M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z" fill="${DONUT_COLORS[i % DONUT_COLORS.length]}" stroke="#fff" stroke-width="1"><title>${escapeHtml(row.platform)} ${(share * 100).toFixed(1)}%</title></path>`;
+        angle += a;
+      });
+      html += `<circle cx="${cx}" cy="${cy}" r="24" fill="white"/><text x="${cx}" y="${cy + 3}" text-anchor="middle" font-size="8" fill="#152033">${total}</text>`;
+      svg.innerHTML = html;
+    }
+
+    window.toggleResultsFocus = () => {
+      document.body.classList.toggle('focus-mode');
+      $('focusBtn').textContent = document.body.classList.contains('focus-mode') ? '退出沉浸（Esc）' : '沉浸查看表格';
+    };
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && document.body.classList.contains('focus-mode')) toggleResultsFocus();
+    });
+
     $('searchResults').addEventListener('click', loadResults);
     $('exportResults').addEventListener('click', () => {
       const query = new URLSearchParams();
-      if ($('filterKeyword').value.trim()) query.set('keyword', $('filterKeyword').value.trim());
+      if ($('filterJob').value) query.set('job_id', $('filterJob').value);
+      getSelectedKeywords().forEach(value => query.append('keywords', value));
       if ($('filterPlatform').value) query.set('platform', $('filterPlatform').value);
+      if ($('filterAccount').value) query.set('account_id', $('filterAccount').value);
+      if ($('filterDateFrom').value) query.set('date_from', $('filterDateFrom').value);
+      if ($('filterDateTo').value) query.set('date_to', $('filterDateTo').value);
       window.location.href = '/admin/api/research/results/export.xlsx?' + query;
     });
+    $('focusBtn').addEventListener('click', toggleResultsFocus);
+
+    const QUADRANT_COLORS = {
+      '垂直长尾宝藏': '#27ae60',
+      '虚假长尾(噪声)': '#e74c3c',
+      '头部主流媒体': '#3498db',
+      '特定品类垂直站': '#f39c12',
+      '普通垂直信源': '#9b59b6',
+      '一次性/僵尸信源': '#95a5a6',
+    };
+    let lastLongTailData = null;
+
+    async function loadLongTailOptions() {
+      try {
+        const data = await api('/admin/api/research/results?limit=1');
+        preserveSelect('ltJob', data.jobs || [], 'id', 'name', '全部任务');
+        preserveSelect('ltAccount', data.accounts || [], null, null, '全部账号');
+      } catch (error) { toast(error.message, true); }
+    }
+
+    function longTailParams() {
+      return {
+        job_id: $('ltJob').value,
+        account_id: $('ltAccount').value,
+        platform: $('ltPlatform').value.trim(),
+        date_from: $('ltDateFrom').value,
+        date_to: $('ltDateTo').value,
+        split_mode: $('ltSplitMode').value,
+        breadth_threshold: Number($('ltBreadth').value),
+        freq_threshold: Number($('ltFreq').value),
+        density_threshold: Number($('ltDensity').value),
+        noise_density_threshold: Number($('ltNoise').value),
+      };
+    }
+
+    async function analyzeLongTail() {
+      try {
+        const data = await postJSON('/admin/api/research/results/long-tail-analysis', longTailParams());
+        lastLongTailData = data;
+        const summary = data.summary || {};
+        $('ltSummary').innerHTML = `
+          <div class="stat"><strong>${summary.total_records || 0}</strong><span>分析记录数</span></div>
+          <div class="stat"><strong>${summary.platform_count || 0}</strong><span>平台数</span></div>
+          <div class="stat"><strong>${summary.target_count || 0}</strong><span>长尾推荐数</span></div>
+          <div class="stat"><strong>${summary.keyword_count || 0}</strong><span>关键词数</span></div>`;
+
+        drawBubbleChart(data.platforms || []);
+        renderQuadrantLegend(data.quadrants || {});
+
+        const targets = data.target_long_tail || [];
+        $('ltTargetRows').innerHTML = targets.map(item => `
+          <tr>
+            <td>${escapeHtml(item.platform)}</td>
+            <td>${item.freq}</td>
+            <td>${item.breadth}</td>
+            <td>${item.density.toFixed(2)}</td>
+            <td>${escapeHtml(item.type || '-')}</td>
+            <td><a href="${escapeHtml(item.representative_link)}" target="_blank" rel="noreferrer">${escapeHtml(item.representative_link)}</a></td>
+          </tr>`).join('') || '<tr><td colspan="6" class="empty">无长尾推荐</td></tr>';
+
+        const platforms = data.platforms || [];
+        $('ltQuadrantRows').innerHTML = platforms.map(item => `
+          <tr>
+            <td>${escapeHtml(item.platform)}</td>
+            <td>${item.freq}</td>
+            <td>${item.breadth}</td>
+            <td>${item.density.toFixed(2)}</td>
+            <td><span style="color:${QUADRANT_COLORS[item.quadrant] || '#999'}">${escapeHtml(item.quadrant)}</span></td>
+          </tr>`).join('') || '<tr><td colspan="5" class="empty">无数据</td></tr>';
+      } catch (error) { toast(error.message, true); }
+    }
+
+    function drawBubbleChart(platforms) {
+      const svg = $('bubbleChart');
+      if (!platforms.length) { svg.innerHTML = ''; return; }
+      const logX = $('ltLogX').checked, logY = $('ltLogY').checked;
+      const W = 600, H = 400, pad = 40;
+      const xs = platforms.map(p => Math.max(logX ? Math.log10(p.breadth || 0.3) : p.breadth, 0));
+      const ys = platforms.map(p => Math.max(logY ? Math.log10(p.freq || 0.3) : p.freq, 0));
+      const xMin = Math.min(...xs), xMax = Math.max(...xs);
+      const yMin = Math.min(...ys), yMax = Math.max(...ys);
+      const xScale = (v) => pad + (v - xMin) / ((xMax - xMin) || 1) * (W - 2 * pad);
+      const yScale = (v) => H - pad - (v - yMin) / ((yMax - yMin) || 1) * (H - 2 * pad);
+      let html = `<line x1="${pad}" y1="${H - pad}" x2="${W - pad}" y2="${H - pad}" stroke="#dfe6ef"/>
+        <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H - pad}" stroke="#dfe6ef"/>
+        <text x="${W - pad}" y="${H - pad + 16}" text-anchor="end" font-size="10" fill="#728097">广度 →</text>
+        <text x="${pad}" y="${pad - 8}" text-anchor="middle" font-size="10" fill="#728097">↑ 频次</text>`;
+      platforms.forEach(p => {
+        const xv = xScale(Math.max(logX ? Math.log10(p.breadth || 0.3) : p.breadth, 0));
+        const yv = yScale(Math.max(logY ? Math.log10(p.freq || 0.3) : p.freq, 0));
+        const r = Math.max(4, Math.sqrt(p.density) * 3);
+        html += `<circle cx="${xv}" cy="${yv}" r="${r}" fill="${QUADRANT_COLORS[p.quadrant] || '#999'}"
+          opacity="0.75" stroke="#fff" stroke-width="1"
+          title="${escapeHtml(p.platform)} 广度${p.breadth} 频次${p.freq} 密度${p.density.toFixed(2)} ${escapeHtml(p.quadrant)}">
+          <title>${escapeHtml(p.platform)} 广度${p.breadth} 频次${p.freq} 密度${p.density.toFixed(2)} ${escapeHtml(p.quadrant)}</title>
+        </circle>`;
+      });
+      svg.innerHTML = html;
+    }
+
+    function renderQuadrantLegend(quadrants) {
+      const names = Object.keys(quadrants);
+      $('ltLegend').innerHTML = names.map(name => `
+        <span class="badge" style="background:${QUADRANT_COLORS[name] || '#999'}20;color:${QUADRANT_COLORS[name] || '#999'};border:1px solid ${QUADRANT_COLORS[name] || '#999'}40">
+          ${escapeHtml(name)} ${quadrants[name] || 0}
+        </span>`).join('') || '';
+    }
+
+    $('analyzeLongTail').addEventListener('click', analyzeLongTail);
+    $('exportLongTail').addEventListener('click', async () => {
+      try {
+        const response = await fetch('/admin/api/research/results/long-tail/export.xlsx', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(longTailParams()),
+        });
+        if (!response.ok) throw new Error((await response.json()).detail || '导出失败');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'long-tail-platforms.xlsx';
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        toast('长尾 Excel 已导出');
+      } catch (error) { toast(error.message, true); }
+    });
+    $('copyKeywords').addEventListener('click', () => {
+      if (!lastLongTailData || !lastLongTailData.target_long_tail) return toast('请先点击分析', true);
+      const text = lastLongTailData.target_long_tail.map(item => item.platform).join('\n');
+      navigator.clipboard.writeText(text).then(() => toast('平台限定词已复制到剪贴板')).catch(() => toast('复制失败', true));
+    });
+    $('ltLogX').addEventListener('change', () => { if (lastLongTailData) drawBubbleChart(lastLongTailData.platforms); });
+    $('ltLogY').addEventListener('change', () => { if (lastLongTailData) drawBubbleChart(lastLongTailData.platforms); });
+
+    async function loadComparisonOptions() {
+      try {
+        const data = await api('/admin/api/research/results?limit=1');
+        preserveSelect('cmpJob', data.jobs || [], 'id', 'name', '全部任务');
+        preserveSelect('cmpAccount', data.accounts || [], null, null, '全部账号');
+      } catch (error) { toast(error.message, true); }
+    }
+
+    const COMPARISON_STATUS = {
+      added: { label: '新增', color: 'var(--green)', bg: '#eaf8f3' },
+      removed: { label: '掉出', color: 'var(--red)', bg: '#fff0f2' },
+      continued: { label: '持续', color: 'var(--blue)', bg: '#eef2ff' },
+    };
+    $('compareSources').addEventListener('click', async () => {
+      const body = {
+        date_a_from: $('cmpDateAFrom').value,
+        date_a_to: $('cmpDateATo').value,
+        date_b_from: $('cmpDateBFrom').value,
+        date_b_to: $('cmpDateBTo').value,
+        job_id: $('cmpJob').value,
+        account_id: $('cmpAccount').value,
+        platform: $('cmpPlatform').value.trim(),
+      };
+      if (!body.date_a_from || !body.date_a_to || !body.date_b_from || !body.date_b_to) {
+        return toast('请选择完整的 A、B 日期区间', true);
+      }
+      try {
+        const data = await postJSON('/admin/api/research/results/source-comparison', body);
+        const summary = data.summary || {};
+        $('cmpTotalA').textContent = summary.a_total || 0;
+        $('cmpTotalB').textContent = summary.b_total || 0;
+        $('cmpAdded').textContent = summary.added_platforms || 0;
+        $('cmpRemoved').textContent = summary.removed_platforms || 0;
+        $('comparisonResult').style.display = 'block';
+
+        const rows = data.rows || [];
+        $('comparisonRows').innerHTML = rows.map(row => {
+          const status = COMPARISON_STATUS[row.status] || {label: row.status, color: '#59677a', bg: '#eef1f6'};
+          return `
+          <tr>
+            <td>${escapeHtml(row.platform)}</td>
+            <td><span class="badge" style="color:${status.color};background:${status.bg};border-color:${status.bg}">${status.label}</span></td>
+            <td>${row.a_count}</td>
+            <td>${row.b_count}</td>
+            <td>${row.a_share != null ? row.a_share + '%' : '-'}</td>
+            <td>${row.b_share != null ? row.b_share + '%' : '-'}</td>
+            <td>${row.delta > 0 ? '+' + row.delta : row.delta}</td>
+            <td>${row.change_rate != null ? row.change_rate + '%' : '-'}</td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="8" class="empty">无变化数据</td></tr>';
+      } catch (error) { toast(error.message, true); }
+    });
+
+    async function loadPlatforms() {
+      try {
+        const data = await api('/admin/api/research/platforms');
+        $('platformRows').innerHTML = data.entries.map(entry => `
+          <tr>
+            <td>${escapeHtml(entry.domain)}</td>
+            <td>${escapeHtml(entry.name)}</td>
+            <td>${escapeHtml(entry.category)}</td>
+          </tr>`).join('') || '<tr><td colspan="3" class="empty">暂无平台规则</td></tr>';
+      } catch (error) { toast(error.message, true); }
+    }
+    $('platformFile').addEventListener('change', async event => {
+      const file = event.target.files[0]; if (!file) return;
+      const form = new FormData(); form.append('file', file);
+      $('platformFileState').textContent = '正在导入…';
+      try {
+        const data = await api('/admin/api/research/platforms/import', {method: 'POST', body: form});
+        $('platformFileState').textContent = `导入完成：新增 ${data.added} 条，忽略 ${data.ignored} 条`;
+        toast(`平台规则导入完成：新增 ${data.added} 条`); await loadPlatforms();
+      } catch (error) { $('platformFileState').textContent = '导入失败'; toast(error.message, true); }
+    });
+
+    let editingTemplateId = null, editingScheduleId = null;
+    async function loadSchedules() {
+      try {
+        const [templates, schedules] = await Promise.all([
+          api('/admin/api/research/templates'),
+          api('/admin/api/research/schedules'),
+        ]);
+        const templateMap = new Map(templates.templates.map(t => [t.id, t]));
+        $('schTemplate').innerHTML = '<option value="">请选择</option>' + templates.templates.map(t =>
+          `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name || '未命名')}</option>`).join('');
+
+        $('templateRows').innerHTML = templates.templates.map(t => `
+          <tr>
+            <td>${escapeHtml(t.name || '未命名')}</td>
+            <td>${(t.keywords || []).length}</td>
+            <td>${t.interval_seconds}s</td>
+            <td class="actions">
+              <button class="btn small" onclick="editTemplate('${escapeHtml(t.id)}')">编辑</button>
+              <button class="btn small danger" onclick="deleteTemplate('${escapeHtml(t.id)}')">删除</button>
+            </td>
+          </tr>`).join('') || '<tr><td colspan="4" class="empty">暂无模板</td></tr>';
+
+        const typeLabels = {interval: '间隔', once: '一次性', daily: '每日'};
+        $('scheduleRows').innerHTML = schedules.schedules.map(s => {
+          const tpl = templateMap.get(s.template_id);
+          return `
+          <tr>
+            <td>${escapeHtml(s.name || '未命名')}</td>
+            <td>${escapeHtml(tpl?.name || '-')}</td>
+            <td>${typeLabels[s.schedule_type] || s.schedule_type}</td>
+            <td>${s.next_run_at ? escapeHtml(new Date(s.next_run_at).toLocaleString()) : '-'}</td>
+            <td><span class="badge ${s.enabled ? 'running' : 'paused'}">${s.enabled ? '启用' : '禁用'}</span></td>
+            <td class="actions">
+              <button class="btn small" onclick="toggleSchedule('${escapeHtml(s.id)}', ${!s.enabled})">${s.enabled ? '禁用' : '启用'}</button>
+              <button class="btn small" onclick="editSchedule('${escapeHtml(s.id)}')">编辑</button>
+              <button class="btn small primary" onclick="runScheduleNow('${escapeHtml(s.id)}')">立即执行</button>
+              <button class="btn small danger" onclick="deleteSchedule('${escapeHtml(s.id)}')">删除</button>
+            </td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="6" class="empty">暂无计划</td></tr>';
+      } catch (error) { toast(error.message, true); }
+    }
+
+    function templateFormBody() {
+      return {
+        name: $('tplName').value.trim(),
+        keywords: $('tplKeywords').value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
+        prompt_template: $('tplPrompt').value.trim(),
+        interval_seconds: Number($('tplInterval').value),
+        account_cooldown_seconds: Number($('tplCooldown').value),
+        max_attempts: Number($('tplAttempts').value),
+      };
+    }
+    $('saveTemplate').addEventListener('click', async () => {
+      const body = templateFormBody();
+      if (!body.keywords.length) return toast('请填写关键词', true);
+      if (!body.prompt_template.includes('{keyword}')) return toast('提问模板必须包含 {keyword}', true);
+      try {
+        if (editingTemplateId) {
+          await postJSON(`/admin/api/research/templates/${editingTemplateId}`, body);
+          toast('模板已更新');
+        } else {
+          await postJSON('/admin/api/research/templates', body);
+          toast('模板已创建');
+        }
+        resetTemplateForm(); await loadSchedules();
+      } catch (error) { toast(error.message, true); }
+    });
+    $('resetTemplateForm').addEventListener('click', resetTemplateForm);
+    function resetTemplateForm() {
+      editingTemplateId = null;
+      $('tplName').value = ''; $('tplKeywords').value = ''; $('tplPrompt').value = '{keyword}';
+      $('tplInterval').value = '10'; $('tplCooldown').value = '0'; $('tplAttempts').value = '2';
+      $('saveTemplate').textContent = '保存模板'; $('resetTemplateForm').style.display = 'none';
+    }
+    window.editTemplate = async id => {
+      try {
+        const data = await api(`/admin/api/research/templates/${id}`);
+        editingTemplateId = id;
+        $('tplName').value = data.name || '';
+        $('tplKeywords').value = (data.keywords || []).join('\n');
+        $('tplPrompt').value = data.prompt_template || '{keyword}';
+        $('tplInterval').value = data.interval_seconds;
+        $('tplCooldown').value = data.account_cooldown_seconds;
+        $('tplAttempts').value = data.max_attempts;
+        $('saveTemplate').textContent = '更新模板'; $('resetTemplateForm').style.display = '';
+      } catch (error) { toast(error.message, true); }
+    };
+    window.deleteTemplate = async id => {
+      if (!confirm('删除模板会同时删除引用它的计划，确定继续？')) return;
+      try { await api(`/admin/api/research/templates/${id}`, {method: 'DELETE'}); toast('模板已删除'); await loadSchedules(); }
+      catch (error) { toast(error.message, true); }
+    };
+
+    $('saveSchedule').addEventListener('click', async () => {
+      const body = {
+        name: $('schName').value.trim(),
+        template_id: $('schTemplate').value,
+        schedule_type: $('schType').value,
+        schedule_value: $('schValue').value.trim(),
+      };
+      if (!body.template_id) return toast('请选择模板', true);
+      if (!body.schedule_value) return toast('请填写触发值', true);
+      try {
+        if (editingScheduleId) {
+          await postJSON(`/admin/api/research/schedules/${editingScheduleId}`, body);
+          toast('计划已更新');
+        } else {
+          await postJSON('/admin/api/research/schedules', body);
+          toast('计划已创建');
+        }
+        resetScheduleForm(); await loadSchedules(); await loadJobs();
+      } catch (error) { toast(error.message, true); }
+    });
+    $('resetScheduleForm').addEventListener('click', resetScheduleForm);
+    function resetScheduleForm() {
+      editingScheduleId = null;
+      $('schName').value = ''; $('schTemplate').value = ''; $('schType').value = 'interval'; $('schValue').value = '';
+      $('saveSchedule').textContent = '创建计划'; $('resetScheduleForm').style.display = 'none';
+    }
+    window.editSchedule = async id => {
+      try {
+        const data = await api(`/admin/api/research/schedules/${id}`);
+        editingScheduleId = id;
+        $('schName').value = data.name || '';
+        $('schTemplate').value = data.template_id;
+        $('schType').value = data.schedule_type;
+        $('schValue').value = data.schedule_value;
+        $('saveSchedule').textContent = '更新计划'; $('resetScheduleForm').style.display = '';
+      } catch (error) { toast(error.message, true); }
+    };
+    window.toggleSchedule = async (id, enabled) => {
+      try { await postJSON(`/admin/api/research/schedules/${id}/toggle`, {enabled}); await loadSchedules(); }
+      catch (error) { toast(error.message, true); }
+    };
+    window.runScheduleNow = async id => {
+      try {
+        const data = await postJSON(`/admin/api/research/schedules/${id}/run`);
+        toast(`计划已执行，生成任务：${data.name || ''}`); await loadSchedules(); await loadJobs();
+      } catch (error) { toast(error.message, true); }
+    };
+    window.deleteSchedule = async id => {
+      if (!confirm('确定删除该定时计划？')) return;
+      try { await api(`/admin/api/research/schedules/${id}`, {method: 'DELETE'}); toast('计划已删除'); await loadSchedules(); }
+      catch (error) { toast(error.message, true); }
+    };
+
     $('exitApp').addEventListener('click', async () => {
       if (!confirm('确定退出软件？正在执行的单条提问会恢复到等待队列。')) return;
       try {
