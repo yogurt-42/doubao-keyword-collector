@@ -1,7 +1,7 @@
 # 开发路线图
 
 > 记录已完成事项与下一阶段实施计划。
-> 最近一次更新：2026-08-10
+> 最近一次更新：2026-08-12
 
 ---
 
@@ -22,28 +22,12 @@
 | 11 | 结果页切换任务卡死修复 | `native_dashboard.py` |
 | 12 | 长尾信源分析页（频次/广度/密度四象限、气泡图、悬停提示、Excel 导出） | `native_dashboard.py`, `research_store.py`, `pyproject.toml` |
 | 13 | 定时任务（Native）：任务模板 + 触发计划两层模型，支持按间隔/一次性/每日定时触发 | `research_store.py`, `research_scheduler.py`, `native_dashboard.py`, `models.py`, `server.py` |
+| 14 | Web UI 与 Native 对齐（历史任务、结果增强、长尾信源、信源对比、定时任务、平台信息） | `server.py`, `models.py`, `static/index.html`, `research_export.py` |
+| 15 | URL → 平台匹配性能优化（suffix map 查找） | `research_platforms.py`, `platform_editor.py` |
 
 ---
 
 ## 待完成
-
-### Phase 1：Web UI 与 Native 对齐
-
-**目标**：让 Web 管理端具备与 Native 端一致的管理能力。
-
-**文件**：
-- `src/doubao2api/static/index.html`
-- `src/doubao2api/server.py`（如有需要）
-
-**内容**：
-- 结果面板整体可滚动
-- 信源分布与占比（Top 20 / “其他” / 查看全部弹窗）
-- 长尾信源分析面板
-- 结果表格增加“平台类型”列
-- 定时任务页面（任务模板 + 触发计划两层模型）
-- （可选）平台信息管理入口
-
----
 
 ### Phase 2：账号置顶
 
@@ -134,7 +118,7 @@
 | 层级 | 变更 |
 |------|------|
 | `Settings` (`config.py`) | 新增 `account_pinned: dict[str, bool]`（账号置顶，尚未实现） |
-| SQLite | 新增 `research_job_templates` 表、`research_schedules` 表；新增 `idx_research_schedules_due`；计划新增 `idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` |
+| SQLite | 已新增 `research_job_templates` 表、`research_schedules` 表；已新增 `idx_research_schedules_due`；计划新增 `idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` |
 
 ---
 
@@ -145,6 +129,16 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/admin/api/accounts/{account_id}/pin` | 设置账号置顶状态（尚未实现） |
+| DELETE | `/admin/api/research/jobs/{job_id}` | 删除历史任务 |
+| POST | `/admin/api/research/jobs/{job_id}/rename` | 重命名历史任务 |
+| POST | `/admin/api/research/results/sync-platform-info` | 按最新平台规则回填旧记录平台类型 |
+| GET | `/admin/api/research/results/keywords` | 结果关键词下拉 |
+| GET | `/admin/api/research/results/jobs` | 结果任务下拉 |
+| POST | `/admin/api/research/results/source-comparison` | A/B 日期区间信源对比 |
+| POST | `/admin/api/research/results/long-tail-analysis` | 长尾信源分析 |
+| POST | `/admin/api/research/results/long-tail/export.xlsx` | 导出优质长尾 Excel |
+| GET | `/admin/api/research/platforms` | 平台规则库列表 |
+| POST | `/admin/api/research/platforms/import` | 导入 Excel 扩展平台规则 |
 | POST | `/admin/api/research/templates` | 创建任务模板 |
 | GET | `/admin/api/research/templates` | 任务模板列表 |
 | GET | `/admin/api/research/templates/{id}` | 任务模板详情 |
@@ -161,7 +155,7 @@
 ### 新增 UI
 
 - **Native**：新增“定时任务”页签（任务模板管理 + 触发计划管理）。
-- **Web**：待新增“定时任务”页面。
+- **Web**：已扩展为 8 页签（新建采集、账号环境、历史任务、采集结果、长尾信源、信源对比、定时任务、平台信息）。
 - **Native/Web**：账号置顶开关（尚未实现）。
 
 ---
@@ -176,6 +170,7 @@
   - 任务模板 CRUD 与级联删除。
   - `create_job_from_schedule` 按模板最新配置生成 job/tasks。
   - 触发计划启用/禁用、到期查询、推进下一次执行时间。
+- `tests/test_research_api.py`：Web 端新增 API（历史任务操作、结果筛选/导出、长尾分析、信源对比、平台信息导入、定时任务立即执行）。
 - `desktop.py` / `account_manager.py`：置顶账号 tab 插入位置（dashboard 0，置顶 1）。
 
 ### 手动测试
@@ -224,15 +219,14 @@
 ## 推荐实施顺序
 
 ```
-Phase 1（Web UI 对齐） → Phase 2（账号置顶） → Phase 3（性能专项）
+Phase 1（Web UI 对齐） ✅ 已完成 → Phase 2（账号置顶） → Phase 3（性能专项）
 ```
 
 每完成一个 Phase，先跑全量测试并验收，再进入下一个。
 
-Phase 1/2/3 的内部顺序：
-1. **Web UI 对齐**：结果页可视化 → 长尾信源 → 定时任务页面 → 平台信息（可选）。
-2. **账号置顶**：配置层 → 账号池 → Desktop tab 管理 → Native UI → Web UI/API。
-3. **性能优化**：账号快照并发限制 → 动态调度休眠 → 数据库连接复用/索引 → UI 刷新频率 → 浏览器轮询优化。
+当前剩余顺序：
+1. **账号置顶**：配置层 → 账号池 → Desktop tab 管理 → Native UI → Web UI/API。
+2. **性能优化**：账号快照并发限制 → 动态调度休眠 → 数据库连接复用/索引 → UI 刷新频率 → 浏览器轮询优化。
 
 ---
 

@@ -194,10 +194,11 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 - 平台规则库的唯一事实来源。
 - `PLATFORM_CATEGORIES`：15 个中文类型，如“综合新闻门户”“企业官网/品牌站”“短视频/社交媒体”等。
-- `PLATFORM_ENTRIES`：按 specificity 排序的 `{domain, name, category}` 列表（约 700+ 条）。
+- `PLATFORM_ENTRIES`：按 specificity 排序的 `{domain, name, category}` 列表（约 5000+ 条）。
+- `_DOMAIN_SUFFIX_MAP`：为加速 URL 匹配而预建的 domain → entry 字典；`entry_for_url()` 按 host 后缀从长到短查找，避免线性扫描。
 - `entry_for_url()` / `platform_for_url()` / `category_for_url()` / `platform_category()`：匹配规则。
 - `to_js_platform_data()`：把规则注入浏览器端 JS，供页面内提取时直接识别平台。
-- 新增/扩充时按域名 specificity 插入（更具体的域名放在通用域名之前）。
+- 新增/扩充时按域名 specificity 插入（更具体的域名放在通用域名之前），并同步重建 suffix map。
 
 ### 5.7 平台规则编辑器：`platform_editor.py`
 
@@ -271,9 +272,8 @@ D:\ai-source-capturer\doubao-keyword-collector
 ### 5.14 Web 界面：`static/index.html`
 
 - 单文件 HTML/CSS/JS。
-- 当前包含：新建采集、账号环境、采集结果。
-- 通过 `fetch('/admin/api/...')` 与后端通信。
-- 历史任务、信源对比、平台信息、图表等页面尚未实现。
+- 已扩展为 8 个页签：新建采集、账号环境、历史任务、采集结果、长尾信源、信源对比、定时任务、平台信息。
+- 通过 `fetch('/admin/api/...')` 与后端通信，能力已与 Native 端对齐。
 
 ### 5.15 API 层：`server.py`
 
@@ -286,10 +286,19 @@ D:\ai-source-capturer\doubao-keyword-collector
   - `POST /admin/api/research/jobs`：创建采集任务。
   - `GET /admin/api/research/jobs`：任务列表 + 调度器快照。
   - `POST /admin/api/research/jobs/{id}/pause|resume|cancel`。
+  - `DELETE /admin/api/research/jobs/{id}`：删除历史任务。
+  - `POST /admin/api/research/jobs/{id}/rename`：重命名历史任务。
   - `GET /admin/api/research/results`：结果列表 + dashboard。
+  - `GET /admin/api/research/results/keywords|jobs`：结果筛选下拉。
   - `GET /admin/api/research/results/export.xlsx`：Excel 导出。
+  - `POST /admin/api/research/results/sync-platform-info`：按最新规则回填旧记录平台类型。
+  - `POST /admin/api/research/results/source-comparison`：A/B 日期区间信源对比。
+  - `POST /admin/api/research/results/long-tail-analysis`：长尾信源分析。
+  - `POST /admin/api/research/results/long-tail/export.xlsx`：导出优质长尾。
+  - `GET /admin/api/research/platforms` / `POST /admin/api/research/platforms/import`：平台规则库。
   - `POST /admin/api/accounts`：创建账号。
   - `POST /admin/api/accounts/{id}/stop|rename|category|...`。
+  - 任务模板 / 触发计划 CRUD 与立即执行接口。
 
 ---
 
@@ -318,9 +327,21 @@ research_results (
 account_runtime (
     account_id, last_used_at, paused_until, pause_reason
 )
+
+research_job_templates (
+    id, name, keywords_json, prompt_template,
+    interval_seconds, account_cooldown_seconds, max_attempts,
+    created_at, updated_at
+)
+
+research_schedules (
+    id, name, template_id, enabled, schedule_type, schedule_value,
+    next_run_at, run_count, last_run_at, last_job_id, last_error,
+    created_at, updated_at
+)
 ```
 
-未来计划新增 `research_schedules` 表（见 `ROADMAP.md` Phase 4）。
+未来可能新增索引（见 `ROADMAP.md` Phase 3）。
 
 ### 6.2 关键状态机
 
@@ -381,7 +402,7 @@ account_runtime (
 
 - `DesktopWindow`：主窗口，包含 `PersistentTabWidget`。
 - `PersistentTabWidget`：使用 `QStackedLayout.StackAll`，后台浏览器页面保持活跃不被隐藏。
-- `NativeDashboard`：index 0 的“采集管理中心”标签，内部再用 `QTabWidget` 切分 7 个页面。
+- `NativeDashboard`：index 0 的“采集管理中心”标签，内部再用 `QTabWidget` 切分 8 个页面。
 - `QtBrowserBridge`：通过 Signal/Slot 在主线程操作 Qt WebEngine 标签页，避免跨线程问题。
 - `DesktopBackend`：在独立线程运行 asyncio 事件循环，UI 通过 `submit()` / `call()` 提交协程/同步函数，通过 `_watch()` 轮询 Future 结果。
 
@@ -415,6 +436,7 @@ account_runtime (
 - 框架：pytest + pytest-asyncio。
 - 测试位置：`tests/`。
 - 当前覆盖：
+  - `test_research_api.py`：Web 端新增 API（历史任务操作、结果筛选/导出、长尾分析、信源对比、平台信息导入、定时任务立即执行）。
   - `test_long_tail_analysis.py`：长尾信源聚合、分类、代表性链接提取。
   - `test_research_links.py`：平台映射、链接归一化。
   - `test_research_platforms.py`：平台库。
@@ -469,4 +491,4 @@ account_runtime (
 - 所有账号数据、Cookie、数据库均保存在本地。
 - 桌面模式依赖 PySide6 可选依赖；服务端模式不需要 GUI。
 - 页面结构变化后需要更新 `selectors.py` 中的选择器。
-- P0/P1 阶段修复、平台类型改造、长尾信源分析已全部完成；后续重点为 Web UI 对齐、账号置顶、定时任务、性能优化（详见 `ROADMAP.md`）。
+- P0/P1 阶段修复、平台类型改造、长尾信源分析、定时任务、Web UI 与 Native 对齐、URL 匹配性能优化已全部完成；后续重点为账号置顶与性能优化专项（详见 `ROADMAP.md`）。
