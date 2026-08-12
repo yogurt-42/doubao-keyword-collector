@@ -30,6 +30,7 @@ from .models import (
     AccountCategoryRequest,
     AccountProvisionRequest,
     AccountRenameRequest,
+    AccountTabHiddenRequest,
     AdminSettingsUpdateRequest,
     ChatCompletionRequest,
     ImageGenerationRequest,
@@ -993,6 +994,17 @@ def create_app(
         return {
             **(await account_pool.snapshot(account_id)),
             "message": "Account category updated",
+        }
+
+    @app.post("/admin/api/accounts/{account_id}/tab-hidden")
+    async def admin_update_account_tab_hidden(
+        account_id: str,
+        body: AccountTabHiddenRequest,
+    ) -> dict[str, Any]:
+        account_pool.set_tab_hidden(account_id, body.hidden)
+        return {
+            **(await account_pool.snapshot(account_id)),
+            "message": "Account tab visibility updated",
         }
 
     @app.post("/admin/api/accounts/category")

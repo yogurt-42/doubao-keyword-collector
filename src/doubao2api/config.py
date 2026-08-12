@@ -39,6 +39,7 @@ class Settings:
     auto_replenish_accounts: bool = False
     auto_replenish_account_categories: list[str] | None = None
     account_categories: dict[str, str] | None = None
+    account_tab_hidden: dict[str, bool] | None = None
     video_daily_credits: int = 10
     video_15s_credit_cost: int = 4
     video_10s_credit_cost: int = 3
@@ -48,6 +49,7 @@ class Settings:
         self.auto_start_account_categories = list(self.auto_start_account_categories or [])
         self.auto_replenish_account_categories = list(self.auto_replenish_account_categories or [])
         self.account_categories = dict(self.account_categories or {})
+        self.account_tab_hidden = dict(self.account_tab_hidden or {})
         self.video_daily_credits = max(0, int(self.video_daily_credits))
         self.video_15s_credit_cost = max(0, int(self.video_15s_credit_cost))
         self.video_10s_credit_cost = max(0, int(self.video_10s_credit_cost))

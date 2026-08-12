@@ -72,6 +72,10 @@ class AccountCategoryRequest(BaseModel):
     category: str | None = None
 
 
+class AccountTabHiddenRequest(BaseModel):
+    hidden: bool
+
+
 class AccountBatchCategoryRequest(BaseModel):
     account_ids: list[str]
     category: str | None = None

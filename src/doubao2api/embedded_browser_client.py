@@ -329,6 +329,11 @@ class EmbeddedBrowserClient:
             raise BrowserUnavailableError("内置浏览器标签页尚未打开")
         await self.bridge.focus_account(self.account_id)
 
+    async def set_tab_visible(self, visible: bool) -> None:
+        if not self._started:
+            raise BrowserUnavailableError("内置浏览器标签页尚未打开")
+        await self.bridge.set_tab_visible(self.account_id, visible)
+
     async def _activate_for_automation(self) -> None:
         if not self._started:
             raise BrowserUnavailableError("内置浏览器标签页尚未打开")

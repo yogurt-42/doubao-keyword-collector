@@ -1979,9 +1979,19 @@ class NativeDashboard(QWidget):
             focus = QPushButton("切换标签")
             focus.setMinimumWidth(88)
             focus.clicked.connect(lambda _, aid=row["account_id"]: self.focus_account(aid))
+            tab_hidden = bool(row.get("tab_hidden"))
+            visibility = QPushButton("显示标签" if tab_hidden else "隐藏标签")
+            visibility.setObjectName("secondaryButton")
+            visibility.setMinimumWidth(88)
+            visibility.clicked.connect(
+                lambda _, aid=row["account_id"], h=tab_hidden: self.toggle_account_tab_hidden(
+                    aid, not h
+                )
+            )
             close = QPushButton("关闭")
             close.clicked.connect(lambda _, aid=row["account_id"]: self.stop_account(aid))
             layout.addWidget(focus)
+            layout.addWidget(visibility)
             layout.addWidget(close)
         else:
             open_button = QPushButton("打开并登录")
@@ -2737,11 +2747,27 @@ class NativeDashboard(QWidget):
 
     def focus_account(self, account_id: str) -> None:
         async def focus() -> None:
+            self.backend.account_pool.set_tab_hidden(account_id, False)
             managed = self.backend.account_pool.get_if_started(account_id)
             if managed is not None:
                 await managed.client.bring_to_front()
 
-        self._watch(self.backend.submit(focus()))
+        self._watch(
+            self.backend.submit(focus()),
+            lambda _: self.refresh_accounts(),
+        )
+
+    def toggle_account_tab_hidden(self, account_id: str, hidden: bool) -> None:
+        async def toggle() -> None:
+            self.backend.account_pool.set_tab_hidden(account_id, hidden)
+            managed = self.backend.account_pool.get_if_started(account_id)
+            if managed is not None:
+                await managed.client.set_tab_visible(not hidden)
+
+        self._watch(
+            self.backend.submit(toggle()),
+            lambda _: self.refresh_accounts(),
+        )
 
     def stop_account(self, account_id: str) -> None:
         self._watch(

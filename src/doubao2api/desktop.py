@@ -86,6 +86,7 @@ class QtBrowserBridge(QObject):
     cookies_requested = Signal(str, object)
     set_cookies_requested = Signal(str, object, object)
     screenshot_requested = Signal(str, object)
+    tab_visibility_requested = Signal(str, bool, object)
     quit_requested = Signal()
     window_activation_requested = Signal()
 
@@ -95,6 +96,7 @@ class QtBrowserBridge(QObject):
         self.sessions: dict[str, dict[str, Any]] = {}
         self.popup_views: list[QWebEngineView] = []
         self.background_open_accounts: set[str] = set()
+        self.is_tab_hidden: Callable[[str], bool] | None = None
         self.open_requested.connect(self._open_account)
         self.close_requested.connect(self._close_account)
         self.focus_requested.connect(self._focus_account)
@@ -105,6 +107,7 @@ class QtBrowserBridge(QObject):
         self.cookies_requested.connect(self._cookies)
         self.set_cookies_requested.connect(self._set_cookies)
         self.screenshot_requested.connect(self._screenshot)
+        self.tab_visibility_requested.connect(self._set_tab_visible)
         self.quit_requested.connect(QApplication.instance().quit)
         self.window_activation_requested.connect(self.window.activate_window)
 
@@ -141,6 +144,15 @@ class QtBrowserBridge(QObject):
 
     async def focus_account(self, account_id: str) -> None:
         await self._request(self.focus_requested, account_id, timeout=8, operation="切换账号页面")
+
+    async def set_tab_visible(self, account_id: str, visible: bool) -> None:
+        await self._request(
+            self.tab_visibility_requested,
+            account_id,
+            visible,
+            timeout=8,
+            operation="设置标签可见性",
+        )
 
     async def activate_account(self, account_id: str) -> None:
         await self._request(
@@ -304,6 +316,8 @@ class QtBrowserBridge(QObject):
             cookie_store.loadAllCookies()
 
             index = self.window.tabs.addTab(view, f"账号 · {account_id}")
+            if self.is_tab_hidden is not None and self.is_tab_hidden(account_id):
+                self.window.tabs.setTabVisible(index, False)
             if open_in_background:
                 session["background_restore"] = self.window.tabs.activateForAutomation(
                     view,
@@ -403,9 +417,27 @@ class QtBrowserBridge(QObject):
         if session is not None:
             view: QWebEngineView = session["view"]
             self._keep_page_active(session["page"])
+            index = self.window.tabs.indexOf(view)
+            if index >= 0 and not self.window.tabs.isTabVisible(index):
+                self.window.tabs.setTabVisible(index, True)
             self.window.tabs.setCurrentWidget(view)
             view.setFocus(Qt.FocusReason.OtherFocusReason)
             _finish(future)
+
+    @Slot(str, bool, object)
+    def _set_tab_visible(
+        self,
+        account_id: str,
+        visible: bool,
+        future: concurrent.futures.Future[Any],
+    ) -> None:
+        session = self.sessions.get(account_id)
+        if session is not None:
+            view: QWebEngineView = session["view"]
+            index = self.window.tabs.indexOf(view)
+            if index >= 0:
+                self.window.tabs.setTabVisible(index, visible)
+        _finish(future)
 
     @Slot(str, object)
     def _activate_account(
@@ -634,6 +666,16 @@ class PersistentTabWidget(QWidget):
     def setTabText(self, index: int, text: str) -> None:
         self.bar.setTabText(index, text)
 
+    def setTabVisible(self, index: int, visible: bool) -> None:
+        if not 0 <= index < self.bar.count():
+            return
+        if not visible and self.bar.currentIndex() == index:
+            self.setCurrentIndex(0)
+        self.bar.setTabVisible(index, visible)
+
+    def isTabVisible(self, index: int) -> bool:
+        return 0 <= index < self.bar.count() and self.bar.isTabVisible(index)
+
     def setDocumentMode(self, enabled: bool) -> None:
         self.bar.setDocumentMode(enabled)
 
@@ -718,6 +760,7 @@ def run_desktop(runtime: RuntimeConfig | None = None) -> None:
     window = DesktopWindow()
     bridge = QtBrowserBridge(window)
     backend = DesktopBackend(bridge, runtime_config)
+    bridge.is_tab_hidden = backend.account_pool.is_tab_hidden
     dashboard = NativeDashboard(backend, window.tabs)
     window.set_dashboard(dashboard)
     window.showMaximized()

@@ -24,50 +24,11 @@
 | 13 | 定时任务（Native）：任务模板 + 触发计划两层模型，支持按间隔/一次性/每日定时触发 | `research_store.py`, `research_scheduler.py`, `native_dashboard.py`, `models.py`, `server.py` |
 | 14 | Web UI 与 Native 对齐（历史任务、结果增强、长尾信源、信源对比、定时任务、平台信息） | `server.py`, `models.py`, `static/index.html`, `research_export.py` |
 | 15 | URL → 平台匹配性能优化（suffix map 查找） | `research_platforms.py`, `platform_editor.py` |
+| 16 | 桌面端账号标签显示/隐藏切换 | `config.py`, `account_manager.py`, `desktop.py`, `native_dashboard.py`, `models.py`, `server.py` |
 
 ---
 
 ## 待完成
-
-### Phase 2：账号置顶
-
-**目标**：在“账号环境”页为每个账号增加置顶开关，置顶账号标签固定在“采集管理中心”右侧。
-
-**涉及文件**：
-- `src/doubao2api/config.py`：`Settings.account_pinned`
-- `src/doubao2api/account_manager.py`：`set_pinned()`、snapshot 返回 `pinned`
-- `src/doubao2api/desktop.py`：置顶标签插入到 index 1
-- `src/doubao2api/native_dashboard.py`：账号卡片开关
-- `src/doubao2api/models.py` + `server.py` + `static/index.html`：API 与 Web 端
-
-**详细任务**：
-
-1. **持久化配置**（`config.py`）
-   - `Settings` 新增 `account_pinned: dict[str, bool] | None = None`。
-   - `__post_init__` 中初始化为空字典。
-
-2. **账号池支持**（`account_manager.py`）
-   - 新增 `set_pinned(account_id: str, pinned: bool)`，更新 `settings.account_pinned` 并保存。
-   - `snapshot()` 与 `_snapshot_error_state()` 返回 `"pinned": bool`。
-   - `rename_account()` 迁移 `account_pinned` key；`delete_account()` 删除对应 key。
-
-3. **主窗口标签管理**（`desktop.py`）
-   - 在 `QtBrowserBridge._open_account()` 打开账号时：
-     - 若账号在 `account_pinned` 中，使用 `self.window.tabs.insertTab(1, view, ...)`；
-     - 否则仍用 `addTab`。
-   - 置顶状态变化时，Native UI 触发标签重排。
-
-4. **Native Dashboard 账号卡片开关**（`native_dashboard.py`）
-   - 在 `_account_card()` 状态徽章右侧增加 `QCheckBox`（“置顶标签”）。
-   - 初始状态读取 `row["pinned"]`；切换时调用 `set_pinned()` 并触发刷新/重排。
-
-5. **Web Dashboard 与后端 API**
-   - 新增 `AccountPinRequest(BaseModel)`，字段 `pinned: bool`。
-   - 新增 `POST /admin/api/accounts/{account_id}/pin`，调用 `account_pool.set_pinned()`。
-   - Web 端账号卡片增加置顶开关并调用新接口。
-   - Web 端没有主窗口 tab，开关仅持久化并在 UI 中显示；实际置顶排序仅在 Desktop 模式生效。
-
----
 
 ### Phase 3：性能优化专项
 
@@ -117,7 +78,7 @@
 
 | 层级 | 变更 |
 |------|------|
-| `Settings` (`config.py`) | 新增 `account_pinned: dict[str, bool]`（账号置顶，尚未实现） |
+| `Settings` (`config.py`) | 新增 `account_tab_hidden: dict[str, bool]`（账号标签显示/隐藏，已实现） |
 | SQLite | 已新增 `research_job_templates` 表、`research_schedules` 表；已新增 `idx_research_schedules_due`；计划新增 `idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` |
 
 ---
@@ -128,7 +89,7 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/admin/api/accounts/{account_id}/pin` | 设置账号置顶状态（尚未实现） |
+| POST | `/admin/api/accounts/{account_id}/tab-hidden` | 设置账号标签显示/隐藏状态 |
 | DELETE | `/admin/api/research/jobs/{job_id}` | 删除历史任务 |
 | POST | `/admin/api/research/jobs/{job_id}/rename` | 重命名历史任务 |
 | POST | `/admin/api/research/results/sync-platform-info` | 按最新平台规则回填旧记录平台类型 |
@@ -156,7 +117,7 @@
 
 - **Native**：新增“定时任务”页签（任务模板管理 + 触发计划管理）。
 - **Web**：已扩展为 8 页签（新建采集、账号环境、历史任务、采集结果、长尾信源、信源对比、定时任务、平台信息）。
-- **Native/Web**：账号置顶开关（尚未实现）。
+- **Native**：账号环境卡片新增“隐藏标签/显示标签”按钮，支持隐藏后仍保持账号激活并在切换标签时恢复显示。
 
 ---
 
@@ -164,14 +125,15 @@
 
 ### 单元测试
 
-- `config.py`：`Settings` 序列化/反序列化 `account_pinned`；重命名/删除后字典同步。
+- `config.py`：`Settings` 序列化/反序列化 `account_tab_hidden`；重命名/删除后字典同步。
 - `research_store.py`：
   - `interval` / `once` / `daily` 下次执行时间计算。
   - 任务模板 CRUD 与级联删除。
   - `create_job_from_schedule` 按模板最新配置生成 job/tasks。
   - 触发计划启用/禁用、到期查询、推进下一次执行时间。
 - `tests/test_research_api.py`：Web 端新增 API（历史任务操作、结果筛选/导出、长尾分析、信源对比、平台信息导入、定时任务立即执行）。
-- `desktop.py` / `account_manager.py`：置顶账号 tab 插入位置（dashboard 0，置顶 1）。
+- `tests/test_account_manager.py`：账号标签隐藏状态持久化、rename/delete 迁移、snapshot 返回 `tab_hidden`。
+- `tests/test_api.py`：`POST /admin/api/accounts/{account_id}/tab-hidden` 接口测试。
 
 ### 手动测试
 
@@ -185,11 +147,13 @@
 7. 点击“立即执行”按钮，确认立即生成 job。
 8. 删除模板，确认关联计划被级联删除。
 
-**账号置顶**
-1. 创建多个账号，分别开启/关闭置顶。
-2. 关闭后重新打开账号，置顶账号出现在“采集管理中心”右侧第 1 位。
-3. 取消置顶后标签移到非置顶区末尾。
-4. 重命名/删除账号后置顶状态正确迁移/清除。
+**账号标签显示/隐藏切换**
+1. 创建并启动两个账号，确认顶部显示两个标签。
+2. 点击账号 A 的“隐藏标签”，确认顶部标签消失，但账号 A 仍可在调度中使用。
+3. 隐藏当前活动标签，确认视图回退到“采集管理中心”。
+4. 点击账号 A 的“切换标签”，确认标签恢复显示并跳转到该账号。
+5. 重启桌面端，确认隐藏状态 persisted。
+6. 重命名/删除隐藏账号，确认状态正确迁移/清除。
 
 **性能**
 1. 10 个以上账号时账号环境页刷新流畅。

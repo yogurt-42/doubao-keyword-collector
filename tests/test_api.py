@@ -42,6 +42,31 @@ def test_account_contract(tmp_path: Path) -> None:
         assert deleted.json()["deleted"] is True
 
 
+def test_account_tab_hidden_api(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        created = client.post(
+            "/admin/api/accounts",
+            json={"account_id": "hidden-tab-account", "start_browser": False},
+        )
+        assert created.status_code == 200
+        assert created.json()["tab_hidden"] is False
+
+        updated = client.post(
+            "/admin/api/accounts/hidden-tab-account/tab-hidden",
+            json={"hidden": True},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["tab_hidden"] is True
+
+        listing = client.get("/admin/api/accounts").json()
+        account = next(
+            item for item in listing["accounts"] if item["account_id"] == "hidden-tab-account"
+        )
+        assert account["tab_hidden"] is True
+
+        client.delete("/admin/api/accounts/hidden-tab-account")
+
+
 def test_models_do_not_require_activation(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         response = client.get("/v1/models")

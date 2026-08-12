@@ -202,6 +202,7 @@ class BrowserAccountPool:
         if path.exists():
             shutil.rmtree(path)
         self.store.settings.account_categories.pop(normalized, None)
+        self.store.settings.account_tab_hidden.pop(normalized, None)
         self.store.save()
 
     async def rename_account(self, account_id: str, new_account_id: str) -> str:
@@ -220,6 +221,9 @@ class BrowserAccountPool:
         category = self.store.settings.account_categories.pop(old, "")
         if category:
             self.store.settings.account_categories[new] = category
+        tab_hidden = self.store.settings.account_tab_hidden.pop(old, False)
+        if tab_hidden:
+            self.store.settings.account_tab_hidden[new] = True
         self.store.save()
         return new
 
@@ -261,6 +265,18 @@ class BrowserAccountPool:
             self.store.settings.account_categories.pop(normalized, None)
         self.store.save()
 
+    def is_tab_hidden(self, account_id: str) -> bool:
+        normalized = normalize_account_id(account_id, self.default_account_id)
+        return bool(self.store.settings.account_tab_hidden.get(normalized, False))
+
+    def set_tab_hidden(self, account_id: str, hidden: bool) -> None:
+        normalized = normalize_account_id(account_id, self.default_account_id)
+        if hidden:
+            self.store.settings.account_tab_hidden[normalized] = True
+        else:
+            self.store.settings.account_tab_hidden.pop(normalized, None)
+        self.store.save()
+
     def account_browser_config(self, account_id: str) -> dict[str, Any]:
         path = self.get_user_data_path(account_id) / ACCOUNT_BROWSER_CONFIG_FILENAME
         if not path.exists():
@@ -282,6 +298,7 @@ class BrowserAccountPool:
             "is_default": account_id == self.default_account_id,
             "user_data_dir": str(self.get_user_data_path(account_id)),
             "category": self.store.settings.account_categories.get(account_id, ""),
+            "tab_hidden": bool(self.store.settings.account_tab_hidden.get(account_id, False)),
             "environment_exists": self.get_user_data_path(account_id).exists(),
             "can_delete": account_id != self.default_account_id,
             "can_reset_environment": account_id != self.default_account_id,
@@ -335,6 +352,7 @@ class BrowserAccountPool:
             "is_default": normalized == self.default_account_id,
             "user_data_dir": str(path),
             "category": self.store.settings.account_categories.get(normalized, ""),
+            "tab_hidden": bool(self.store.settings.account_tab_hidden.get(normalized, False)),
             "environment_exists": path.exists(),
             "can_delete": normalized != self.default_account_id,
             "can_reset_environment": normalized != self.default_account_id,

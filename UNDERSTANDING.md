@@ -96,7 +96,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 - `Settings`（`src/doubao2api/config.py`）：用户持久化配置。
   - `default_account_id`、`auto_start_all_accounts`、各类别/配额设置。
-  - 预留字段 `account_pinned`（账号置顶，尚未实现）。
+  - `account_tab_hidden: dict[str, bool]`：账号标签显示/隐藏状态，默认显示。
 - `RuntimeConfig`：运行时环境配置（host/port/headless/browser 等）。
 - `SettingsStore`：将 `Settings` 读写为 `%LOCALAPPDATA%\DoubaoAccountManager\settings.json`。
 
@@ -108,7 +108,7 @@ D:\ai-source-capturer\doubao-keyword-collector
   - `discover_account_ids()`：扫描 `accounts/` 目录发现账号。
   - `start_account()` / `stop_account()`：启动/停止浏览器。
   - `snapshots()`：并发获取所有账号状态，支持失败退避。
-  - `set_category()` / `rename_account()` / `delete_account()`：账号元数据维护。
+  - `set_category()` / `is_tab_hidden()` / `set_tab_hidden()` / `rename_account()` / `delete_account()`：账号元数据维护。
 - 桌面模式下，客户端实例由 `desktop.py` 的 `client_factory` 创建为 `EmbeddedBrowserClient`。
 
 ### 5.3 浏览器客户端

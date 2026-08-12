@@ -21,6 +21,33 @@ def test_account_id_validation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tab_hidden_persistence_and_rename_delete(tmp_path: Path) -> None:
+    store = SettingsStore(tmp_path)
+    pool = BrowserAccountPool(store, RuntimeConfig(open_admin_browser=False))
+
+    pool.ensure_account_environment("account-a")
+    assert not pool.is_tab_hidden("account-a")
+
+    pool.set_tab_hidden("account-a", True)
+    assert pool.is_tab_hidden("account-a")
+    assert store.settings.account_tab_hidden.get("account-a") is True
+
+    snapshot = await pool.snapshot("account-a")
+    assert snapshot["tab_hidden"] is True
+
+    # 重命名后隐藏状态应迁移到新 id
+    renamed = await pool.rename_account("account-a", "account-b")
+    assert renamed == "account-b"
+    assert not pool.is_tab_hidden("account-a")
+    assert pool.is_tab_hidden("account-b")
+
+    # 删除后隐藏状态应被清理
+    await pool.delete_account("account-b")
+    assert not pool.is_tab_hidden("account-b")
+    assert "account-b" not in store.settings.account_tab_hidden
+
+
+@pytest.mark.asyncio
 async def test_environment_lifecycle(tmp_path: Path) -> None:
     store = SettingsStore(tmp_path)
     pool = BrowserAccountPool(store, RuntimeConfig(open_admin_browser=False))
