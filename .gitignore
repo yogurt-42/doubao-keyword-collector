@@ -12,4 +12,5 @@ build/
 build-final/
 packaging/*.log
 
-
+# User-facing guides that are maintained locally but not version-controlled by default.
+docs/下载与安装指南.md

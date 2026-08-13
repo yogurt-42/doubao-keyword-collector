@@ -6,6 +6,7 @@ import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -78,9 +79,11 @@ class BrowserAccountPool:
         store: SettingsStore,
         runtime: RuntimeConfig,
         client_factory: Callable[[Path, str, RuntimeConfig], Any] | None = None,
+        runtime_store: Any | None = None,
     ) -> None:
         self.store = store
         self.runtime = runtime
+        self.runtime_store = runtime_store
         self.default_account_id = store.settings.default_account_id
         self.accounts_root = (store.data_root / "accounts").resolve()
         self.accounts_root.mkdir(parents=True, exist_ok=True)
@@ -293,6 +296,17 @@ class BrowserAccountPool:
 
     def _snapshot_error_state(self, account_id: str, error: str) -> dict[str, Any]:
         managed = self._managed.get(account_id)
+        runtime = (
+            self.runtime_store.account_runtime(account_id) if self.runtime_store is not None else {}
+        )
+        paused_until = runtime.get("paused_until") or ""
+        pause_reason = runtime.get("pause_reason") or ""
+        is_paused = False
+        if paused_until:
+            try:
+                is_paused = datetime.now().astimezone() < datetime.fromisoformat(paused_until)
+            except ValueError:
+                is_paused = False
         return {
             "account_id": account_id,
             "is_default": account_id == self.default_account_id,
@@ -309,6 +323,9 @@ class BrowserAccountPool:
             "chat_ready": False,
             "has_ms_token": False,
             "needs_captcha": False,
+            "paused_until": paused_until,
+            "pause_reason": pause_reason,
+            "is_paused": is_paused,
             "last_error_code": 0,
             "consecutive_failures": 0,
             "manually_stopped": False,
@@ -346,6 +363,17 @@ class BrowserAccountPool:
                 "consecutive_failures": 0,
             }
         )
+        runtime = (
+            self.runtime_store.account_runtime(normalized) if self.runtime_store is not None else {}
+        )
+        paused_until = runtime.get("paused_until") or ""
+        pause_reason = runtime.get("pause_reason") or ""
+        is_paused = False
+        if paused_until:
+            try:
+                is_paused = datetime.now().astimezone() < datetime.fromisoformat(paused_until)
+            except ValueError:
+                is_paused = False
         daily_limit = self.store.settings.video_daily_credits
         return {
             "account_id": normalized,
@@ -363,6 +391,9 @@ class BrowserAccountPool:
             "chat_ready": state["chat_ready"],
             "has_ms_token": state["has_ms_token"],
             "needs_captcha": state["needs_captcha"],
+            "paused_until": paused_until,
+            "pause_reason": pause_reason,
+            "is_paused": is_paused,
             "last_error_code": state["last_error_code"],
             "consecutive_failures": state["consecutive_failures"],
             "manually_stopped": False,

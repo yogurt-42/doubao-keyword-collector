@@ -343,6 +343,82 @@ async def test_scheduler_dispatches_multiple_accounts_in_one_loop() -> None:
     await asyncio.gather(*list(scheduler._workers))
 
 
+class CaptchaClient(FakeClient):
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self._needs_captcha = False
+
+    async def chat(self, messages: list[dict[str, str]], **_: Any) -> dict[str, Any]:
+        self.started.set()
+        await self.release.wait()
+        return {"thinking_references": []}
+
+
+class CaptchaStore(FakeStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pause_calls: list[tuple[str, int, str]] = []
+
+    def pause_account(self, account_id: str, seconds: int, reason: str) -> None:
+        self.pause_calls.append((account_id, seconds, reason))
+
+
+class CaptchaAccountPool:
+    def __init__(self) -> None:
+        self.client = CaptchaClient()
+        self.account = type("Account", (), {"client": self.client})()
+
+    def discover_account_ids(self) -> list[str]:
+        return ["账号1"]
+
+    def get_if_started(self, account_id: str) -> Any:
+        return self.account
+
+
+@pytest.mark.asyncio
+async def test_scheduler_pauses_account_when_captcha_detected() -> None:
+    store = CaptchaStore()
+    pool = CaptchaAccountPool()
+    scheduler = ResearchScheduler(store, pool)  # type: ignore[arg-type]
+    callback_calls: list[str] = []
+    scheduler.on_captcha_callback = callback_calls.append
+
+    await scheduler._dispatch_due_tasks()
+    await asyncio.wait_for(pool.client.started.wait(), timeout=1)
+
+    # Simulate the browser client detecting a captcha challenge.
+    pool.client._needs_captcha = True
+    await asyncio.sleep(3.5)
+
+    assert any(call == ("账号1", 1800, "检测到人机验证，请人工处理") for call in store.pause_calls)
+    assert "账号1" in callback_calls
+
+    # After the user solves the challenge, the original chat resumes.
+    pool.client._needs_captcha = False
+    pool.client.release.set()
+    await asyncio.gather(*list(scheduler._workers))
+
+    assert "task-1" in store.completed
+
+
+@pytest.mark.asyncio
+async def test_scheduler_releases_account_after_task_timeout(monkeypatch) -> None:
+    monkeypatch.setattr("doubao2api.research_scheduler.TASK_TIMEOUT_SECONDS", 2)
+    store = CaptchaStore()
+    pool = CaptchaAccountPool()
+    scheduler = ResearchScheduler(store, pool)  # type: ignore[arg-type]
+
+    await scheduler._dispatch_due_tasks()
+    await asyncio.wait_for(pool.client.started.wait(), timeout=1)
+
+    # Allow the task to hit the overall timeout without solving the captcha.
+    await asyncio.gather(*list(scheduler._workers))
+
+    assert ("task-1", False) in store.failed
+    assert "账号1" not in scheduler._busy_accounts
+
+
 class LRUAccountPool:
     def __init__(self) -> None:
         self.accounts = {account_id: FakeAccount() for account_id in ["账号1", "账号2", "账号3"]}

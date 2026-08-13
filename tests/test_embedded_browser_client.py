@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -213,9 +214,7 @@ async def test_chat_can_finish_from_page_state_without_network_capture(
 
 
 @pytest.mark.asyncio
-async def test_chat_stops_and_marks_account_when_captcha_appears(
-    tmp_path: Path,
-) -> None:
+async def test_chat_waits_when_captcha_appears(tmp_path: Path) -> None:
     bridge = CaptchaBridge()
     client = EmbeddedBrowserClient(
         bridge=bridge,
@@ -224,11 +223,14 @@ async def test_chat_stops_and_marks_account_when_captcha_appears(
     )
 
     await client.start()
-    with pytest.raises(RuntimeError, match="验证码"):
-        await client.chat(
-            [{"role": "user", "content": "装修公司推荐"}],
-            fresh_conversation=True,
-            collect_thinking_references=True,
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            client.chat(
+                [{"role": "user", "content": "装修公司推荐"}],
+                fresh_conversation=True,
+                collect_thinking_references=True,
+            ),
+            timeout=2,
         )
 
     assert client._needs_captcha is True

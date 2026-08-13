@@ -17,6 +17,8 @@ from .browser_client import (
 from .cookie_utils import parse_cookie_records
 from .research_platforms import category_for_url, platform_for_url, to_js_platform_data
 from .selectors import (
+    CAPTCHA_DOM_SELECTORS,
+    CAPTCHA_IFRAME_PATTERNS,
     REFERENCE_SUMMARY_PATTERN,
     SELECTORS,
     js_regex_alternation,
@@ -36,6 +38,8 @@ REFERENCE_APPEAR_TIMEOUT_SECONDS = 10.0
 NEW_CONVERSATION_READY_TIMEOUT_SECONDS = 5.0
 PAGE_HEALTH_PING_TIMEOUT_SECONDS = 5.0
 MAX_SCRIPT_TIMEOUT_STREAK = 2
+CAPTCHA_STALL_SECONDS = 30.0
+CAPTCHA_MAX_WAIT_SECONDS = 600.0
 
 
 CAPTURE_SCRIPT = r"""
@@ -148,6 +152,78 @@ def build_reference_rows_script() -> str:
         .replace("__REFERENCE_TITLE__", js_string(SELECTORS["reference_title"]))
         .replace("__REFERENCE_SOURCE__", js_string(SELECTORS["reference_source"]))
         .replace("__PLATFORM_DATA__", to_js_platform_data())
+    )
+
+
+CAPTCHA_DETECT_SCRIPT_TEMPLATE = r"""
+(() => {
+  const tidy = value => (value || '').replace(/\s+/g, ' ').trim();
+  const visible = node => {
+    if (!node) return false;
+    const style = getComputedStyle(node);
+    const box = node.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden'
+      && box.width > 0 && box.height > 0;
+  };
+  const bodyText = document.body ? (document.body.innerText || '') : '';
+  const textPattern = new RegExp(__CAPTCHA_TEXT_PATTERN__);
+  const textMatch = textPattern.test(bodyText);
+  const iframePatterns = __CAPTCHA_IFRAME_PATTERNS__;
+  const iframeMatch = [...document.querySelectorAll('iframe')].some(iframe => {
+    const src = (iframe.src || iframe.getAttribute('src') || '').toLowerCase();
+    return iframePatterns.some(pattern => src.includes(pattern));
+  });
+  const captchaSelectors = __CAPTCHA_DOM_SELECTORS__;
+  const overlayNodes = captchaSelectors
+    .flatMap(selector => [...document.querySelectorAll(selector)])
+    .filter(visible);
+  let imageGridMatch = false;
+  let dragHandleMatch = false;
+  for (const node of overlayNodes) {
+    const imgs = [...node.querySelectorAll('img')].filter(visible);
+    if (imgs.length >= 6) {
+      imageGridMatch = true;
+    }
+    const text = tidy(node.innerText || '');
+    if (/拖动|拖拽|滑动|滑块/.test(text)) {
+      dragHandleMatch = true;
+    }
+  }
+  if (!imageGridMatch) {
+    const visibleImgs = [...document.querySelectorAll('img')].filter(visible);
+    const parentCounts = new Map();
+    for (const img of visibleImgs) {
+      let parent = img.parentElement;
+      while (parent && parent !== document.body) {
+        parentCounts.set(parent, (parentCounts.get(parent) || 0) + 1);
+        parent = parent.parentElement;
+      }
+    }
+    for (const [parent, count] of parentCounts) {
+      if (count >= 6 && visible(parent)) {
+        imageGridMatch = true;
+        break;
+      }
+    }
+  }
+  return {
+    textMatch,
+    iframeMatch,
+    imageGridMatch,
+    dragHandleMatch,
+    overlayVisible: overlayNodes.length > 0
+  };
+})()
+"""
+
+
+def build_captcha_detect_script() -> str:
+    return (
+        CAPTCHA_DETECT_SCRIPT_TEMPLATE.replace(
+            "__CAPTCHA_TEXT_PATTERN__", js_regex_alternation(SELECTORS["captcha_patterns"])
+        )
+        .replace("__CAPTCHA_IFRAME_PATTERNS__", js_selector_list(CAPTCHA_IFRAME_PATTERNS))
+        .replace("__CAPTCHA_DOM_SELECTORS__", js_selector_list(CAPTCHA_DOM_SELECTORS))
     )
 
 
@@ -429,6 +505,24 @@ class EmbeddedBrowserClient:
                 return True
             await asyncio.sleep(interval)
         return False
+
+    async def _detect_captcha(self) -> dict[str, Any]:
+        """Run visual/structural captcha detection in addition to body-text scan."""
+
+        try:
+            result = await self._run_script(build_captcha_detect_script())
+        except Exception:
+            return {}
+        if isinstance(result, dict):
+            return result
+        return {}
+
+    async def _has_visual_captcha(self) -> bool:
+        detected = await self._detect_captcha()
+        return any(
+            detected.get(key)
+            for key in ("textMatch", "iframeMatch", "imageGridMatch", "dragHandleMatch")
+        )
 
     async def _debug_snapshot(self) -> dict[str, Any]:
         """Capture a lightweight snapshot of the current page for debugging."""
@@ -738,6 +832,9 @@ class EmbeddedBrowserClient:
                     self._mark_needs_captcha("页面 JavaScript 无响应")
                     raise RuntimeError("页面无响应，疑似需要验证码，请人工处理")
                 deadline = time.monotonic() + timeout
+                captcha_hard_deadline: float | None = None
+                last_event_len = 0
+                last_progress_at = time.monotonic()
                 capture: dict[str, Any] = {}
                 response_completed = False
                 saw_loading = False
@@ -745,18 +842,27 @@ class EmbeddedBrowserClient:
                 send_button_selectors = js_selector_list(SELECTORS["send_button"])
                 reference_summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
                 captcha_pattern = js_regex_alternation(SELECTORS["captcha_patterns"])
-                while time.monotonic() < deadline:
+                while time.monotonic() < deadline or (
+                    self._needs_captcha
+                    and captcha_hard_deadline is not None
+                    and time.monotonic() < captcha_hard_deadline
+                ):
                     capture = (
                         await self._run_script_or_track_timeout(
                             "window.__doubaoEmbeddedCapture || {}",
                         )
                         or {}
                     )
+                    current_event_len = len(capture.get("events", []))
+                    if current_event_len > last_event_len:
+                        last_event_len = current_event_len
+                        last_progress_at = time.monotonic()
                     if capture.get("done"):
                         if not collect_thinking_references:
                             response_completed = True
                             break
                         answer_finished_at = answer_finished_at or time.monotonic()
+                        last_progress_at = time.monotonic()
                     page_state = (
                         await self._run_script_or_track_timeout(
                             (
@@ -790,9 +896,35 @@ class EmbeddedBrowserClient:
                     )
                     if not isinstance(page_state, dict):
                         page_state = {}
+                    if page_state.get("referenceReady"):
+                        last_progress_at = time.monotonic()
+                    if self._needs_captcha:
+                        # Keep polling until the user clears the captcha flag.
+                        # The scheduler will pause the account in the meantime.
+                        if page_state.get("captcha"):
+                            last_progress_at = time.monotonic()
+                        await asyncio.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
+                        continue
                     if page_state.get("captcha"):
                         self._needs_captcha = True
-                        raise RuntimeError("检测到豆包验证码，请在账号标签页完成验证后重试")
+                        if captcha_hard_deadline is None:
+                            captcha_hard_deadline = time.monotonic() + CAPTCHA_MAX_WAIT_SECONDS
+                        await asyncio.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
+                        continue
+                    # Response-stall watchdog: if nothing has happened for a while,
+                    # run visual captcha detection to catch image-grid/iframe challenges.
+                    if time.monotonic() - last_progress_at >= CAPTCHA_STALL_SECONDS:
+                        with suppress(Exception):
+                            if await self._has_visual_captcha():
+                                self._needs_captcha = True
+                                if captcha_hard_deadline is None:
+                                    captcha_hard_deadline = (
+                                        time.monotonic() + CAPTCHA_MAX_WAIT_SECONDS
+                                    )
+                                await asyncio.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
+                                continue
+                        # Reset the stall clock so we do not spam detection.
+                        last_progress_at = time.monotonic()
                     loading = bool(page_state.get("loading"))
                     saw_loading = saw_loading or loading
                     if page_state.get("referenceReady"):
@@ -812,6 +944,8 @@ class EmbeddedBrowserClient:
                         break
                     await asyncio.sleep(RESPONSE_POLL_INTERVAL_SECONDS)
                 if not response_completed:
+                    if self._needs_captcha:
+                        raise TimeoutError("等待人工验证超时")
                     raise TimeoutError("等待豆包回答超时")
                 fragments: list[str] = []
                 for event in capture.get("events", []):

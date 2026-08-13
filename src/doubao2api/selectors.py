@@ -76,8 +76,38 @@ SELECTORS = {
         "请完成验证",
         "身份验证",
         "校验码",
+        "拖动",
+        "拖拽",
+        "滑块",
     ],
 }
+
+# Additional captcha detection heuristics used by the desktop client.
+# These are matched against iframe URLs and visible DOM structures, which
+# helps catch image-grid or drag-and-drop challenges that do not expose
+# descriptive text in document.body.innerText.
+CAPTCHA_IFRAME_PATTERNS = [
+    "captcha",
+    "verify",
+    "verification",
+    "geetest",
+    "turing",
+    "sec",
+    "hcaptcha",
+    "recaptcha",
+    "slider",
+]
+
+CAPTCHA_DOM_SELECTORS = [
+    '[class*="captcha"]',
+    '[class*="verify"]',
+    '[class*="verification"]',
+    '[class*="geetest"]',
+    '[class*="turing"]',
+    '[class*="risk"]',
+    '[class*="slider"]',
+    '[class*="drag"]',
+]
 
 
 def js_selector_list(selectors: list[str]) -> str:

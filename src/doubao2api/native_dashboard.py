@@ -779,6 +779,7 @@ class DesktopBackend:
         self.bridge = bridge
         self.runtime = runtime
         self.settings_store = SettingsStore()
+        self.research_store = ResearchStore(self.settings_store.data_root / "research.sqlite3")
 
         def client_factory(
             user_data_dir: Path,
@@ -791,8 +792,8 @@ class DesktopBackend:
             self.settings_store,
             runtime,
             client_factory=client_factory,
+            runtime_store=self.research_store,
         )
-        self.research_store = ResearchStore(self.settings_store.data_root / "research.sqlite3")
         self.scheduler = ResearchScheduler(self.research_store, self.account_pool)
         self.loop = asyncio.new_event_loop()
         self.ready = threading.Event()
@@ -845,11 +846,16 @@ class DesktopBackend:
 
 
 class NativeDashboard(QWidget):
+    captcha_detected = Signal(str)
+
     def __init__(self, backend: DesktopBackend, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("dashboard")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.backend = backend
+        self.captcha_detected.connect(self._on_captcha_detected)
+        backend.scheduler.on_captcha_callback = self.captcha_detected.emit
+
         self.pending: list[PendingOperation] = []
         self.refreshing_accounts = False
         self.refreshing_jobs = False
@@ -1998,11 +2004,13 @@ class NativeDashboard(QWidget):
         text_box.addWidget(title)
         text_box.addWidget(detail)
         layout.addLayout(text_box, 1)
+        is_paused = bool(row.get("is_paused"))
+        pause_reason = row.get("pause_reason") or ""
         status_text = (
             "状态超时"
             if row.get("snapshot_error")
-            else "需处理验证"
-            if row["needs_captcha"]
+            else "已暂停—需处理验证"
+            if is_paused or row["needs_captcha"]
             else "可采集"
             if row["chat_ready"]
             else "已登录"
@@ -2011,7 +2019,7 @@ class NativeDashboard(QWidget):
         )
         tone = (
             "failed"
-            if row["needs_captcha"]
+            if is_paused or row["needs_captcha"]
             else "ready"
             if row["chat_ready"]
             else "paused"
@@ -2021,13 +2029,16 @@ class NativeDashboard(QWidget):
         badge = self._status_badge(status_text, tone)
         if row.get("snapshot_error"):
             badge.setToolTip(row["snapshot_error"])
+        elif is_paused and pause_reason:
+            badge.setToolTip(pause_reason)
         layout.addWidget(badge)
         captcha_like = (
-            row.get("needs_captcha")
+            is_paused
+            or row.get("needs_captcha")
             or "验证码" in (row.get("snapshot_error") or "")
             or "无响应" in (row.get("snapshot_error") or "")
         )
-        if captcha_like:
+        if captcha_like and row["started"]:
             clear = QPushButton("验证已完成")
             clear.setObjectName("secondaryButton")
             clear.setMinimumWidth(100)
@@ -2757,6 +2768,22 @@ class NativeDashboard(QWidget):
                 f"共 {len(rows)} 个账号 · 已打开 {opened_count} · 可采集 {ready_count}"
                 + (f" · {warning_count} 个状态读取超时" if warning_count else "")
             )
+            signature = tuple(
+                (
+                    row["account_id"],
+                    row["started"],
+                    row["logged_in"],
+                    row["chat_ready"],
+                    row["needs_captcha"],
+                    row.get("is_paused"),
+                    row.get("tab_hidden"),
+                    row.get("snapshot_error"),
+                )
+                for row in rows
+            )
+            if getattr(self, "_accounts_signature", None) == signature:
+                return
+            self._accounts_signature = signature
             self._clear_cards(self.accounts_cards_layout)
             for row in rows:
                 self.accounts_cards_layout.addWidget(self._account_card(row))
@@ -2814,6 +2841,10 @@ class NativeDashboard(QWidget):
             self.backend.submit(focus()),
             lambda _: self.refresh_accounts(),
         )
+
+    def _on_captcha_detected(self, account_id: str) -> None:
+        """Bring the offending account tab to the front so the user can solve the challenge."""
+        self.focus_account(account_id)
 
     def toggle_account_tab_hidden(self, account_id: str, hidden: bool) -> None:
         async def toggle() -> None:

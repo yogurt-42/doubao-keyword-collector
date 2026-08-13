@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -59,6 +61,7 @@ class ResearchScheduler:
         self._wake_event = asyncio.Event()
         self._selection_wait_reason = ""
         self.last_error = ""
+        self.on_captcha_callback: Callable[[str], Any] | None = None
 
     def cancel_job(self, job_id: str) -> None:
         """Signal active workers for this job to stop early."""
@@ -274,6 +277,7 @@ class ResearchScheduler:
         if self._is_job_cancelled(task["job_id"]):
             self.store.fail_or_retry_task(task["id"], "任务已取消", retry=False)
             return
+        chat_task: asyncio.Task[dict[str, Any]] | None = None
         try:
             account = self.account_pool.get_if_started(account_id)
             if account is None:
@@ -300,15 +304,42 @@ class ResearchScheduler:
                 task["id"],
                 "关键词已开始发送，随后会等待豆包回答并展开参考资料",
             )
-            result = await asyncio.wait_for(
-                account.client.chat(
-                    [{"role": "user", "content": prompt}],
-                    fresh_conversation=True,
-                    collect_thinking_references=True,
-                    reference_callback=save_reference,
-                ),
-                timeout=TASK_TIMEOUT_SECONDS,
-            )
+
+            async def _chat_with_captcha_poll() -> dict[str, Any]:
+                nonlocal chat_task
+                chat_task = asyncio.create_task(
+                    account.client.chat(
+                        [{"role": "user", "content": prompt}],
+                        fresh_conversation=True,
+                        collect_thinking_references=True,
+                        reference_callback=save_reference,
+                    )
+                )
+                paused_for_captcha = False
+                alerted_for_captcha = False
+                deadline = time.monotonic() + TASK_TIMEOUT_SECONDS
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError
+                    wait_timeout = min(3.0, remaining)
+                    done, _ = await asyncio.wait({chat_task}, timeout=wait_timeout)
+                    if chat_task in done:
+                        return chat_task.result()
+                    if account.client._needs_captcha:
+                        if not paused_for_captcha:
+                            self.store.pause_account(
+                                account_id,
+                                1800,
+                                "检测到人机验证，请人工处理",
+                            )
+                            paused_for_captcha = True
+                        if not alerted_for_captcha and self.on_captcha_callback:
+                            with contextlib.suppress(Exception):
+                                self.on_captcha_callback(account_id)
+                            alerted_for_captcha = True
+
+            result = await _chat_with_captcha_poll()
             if self._is_job_cancelled(task["job_id"]):
                 self.store.fail_or_retry_task(task["id"], "任务已取消", retry=False)
                 return
@@ -342,5 +373,9 @@ class ResearchScheduler:
             retry = task["attempt_count"] + 1 < task["max_attempts"]
             self.store.fail_or_retry_task(task["id"], str(exc), retry=retry)
         finally:
+            if chat_task is not None and not chat_task.done():
+                chat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+                    await chat_task
             self._busy_accounts.discard(account_id)
             self.wake()

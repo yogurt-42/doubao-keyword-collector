@@ -1,7 +1,7 @@
 # 开发路线图
 
 > 记录已完成事项与下一阶段实施计划。
-> 最近一次更新：2026-08-12
+> 最近一次更新：2026-08-13
 
 ---
 
@@ -72,24 +72,26 @@
    - `_expand_references` 中当已收集到 `expected` 条或 `expected == 0` 时提前退出循环。
    - 调试快照默认仅在启用调试标志时写入，或限制 body 大小。
 
-### 优化：触发豆包人机验证后账号卡住无处理
+### ✅ 优化：触发豆包人机验证后账号卡住无处理
 
 **现象**：实际采集时一旦豆包页面触发验证码/安全校验/人机验证，账号页面会卡住，既不暂停账号，也不提示用户人工处理；当前关键词任务一直挂起，直到所有任务跑完才按失败处理，期间调度器仍可能继续分配任务。
 
-**目标**：
-- 补强验证码检测：除了 `body.innerText` 文本匹配，增加对验证码 iframe、特定 DOM 结构、连续 JS 无响应的检测。
-- 任务执行期增加“卡住兜底”：长时间无进展时主动截图并触发验证码/风控判定。
-- 一旦确认需人工验证，立即调用 `pause_account(account_id, 1800, ...)`，避免继续占用调度。
-- 优化 Native UI 提示：更醒目的“需处理验证”状态，必要时弹窗或截图浮层。
-- 点击“验证已完成”后先探测页面恢复正常再 `resume_account`，防止反复失败。
+**已实现**：
+- 补强验证码检测：除 `body.innerText` 外，新增 iframe URL、九宫格图片容器、拖拽元素等视觉/结构检测。
+- `chat()` 检测到验证码后不再抛异常，而是标记 `_needs_captcha=True` 并继续等待；验证码清除后原提问继续运行。
+- 调度器 `_run_task()` 每 3 秒检查 `_needs_captcha`，一旦为真立即 `pause_account(account_id, 1800, ...)` 并触发 UI 跳转。
+- 账号卡片显示“已暂停—需处理验证”并展示 `pause_reason` tooltip。
+- 隐藏账号触发验证时自动恢复标签可见并 `bring_to_front()`。
 
 **涉及文件**：
 - `src/doubao2api/selectors.py`
 - `src/doubao2api/embedded_browser_client.py`
-- `src/doubao2api/browser_client.py`
 - `src/doubao2api/research_scheduler.py`
+- `src/doubao2api/account_manager.py`
 - `src/doubao2api/native_dashboard.py`
-- `src/doubao2api/research_store.py`
+- `tests/test_research_scheduler.py`
+
+> 服务端 Playwright 模式（`browser_client.py`）暂未处理，后续按需补充。
 
 ---
 
@@ -202,14 +204,13 @@
 ## 推荐实施顺序
 
 ```
-Phase 1（Web UI 对齐） ✅ 已完成 → Phase 2（账号置顶） → Phase 3（性能专项）
+Phase 1（Web UI 对齐） ✅ 已完成 → Phase 2（账号标签显示/隐藏切换） ✅ 已完成 → Phase 3（性能专项）
 ```
 
 每完成一个 Phase，先跑全量测试并验收，再进入下一个。
 
 当前剩余顺序：
-1. **账号置顶**：配置层 → 账号池 → Desktop tab 管理 → Native UI → Web UI/API。
-2. **性能优化**：账号快照并发限制 → 动态调度休眠 → 数据库连接复用/索引 → UI 刷新频率 → 浏览器轮询优化。
+1. **性能优化**：账号快照并发限制 → 动态调度休眠 → 数据库连接复用/索引 → UI 刷新频率 → 浏览器轮询优化。
 
 ---
 
@@ -226,5 +227,5 @@ python -m ruff format --check src/doubao2api tests
 
 ## 备注
 
-- `AI-UNDERSTANDING.md` 与 `UNDERSTANDING.md` 已随本次改动更新；后续随 Phase 1/2 完成后继续补充。
+- `AI-UNDERSTANDING.md` 与 `UNDERSTANDING.md` 已随 Phase 1/2 完成后更新；后续随 Phase 3 完成后继续补充。
 - 定时任务采用“任务模板 + 触发计划”两层模型：模板保存采集配置（不保存账号），计划保存触发规则并引用模板；计划触发时按模板最新配置生成一次性 `research_jobs`，账号由调度器按现有 LRU 逻辑动态选择。
