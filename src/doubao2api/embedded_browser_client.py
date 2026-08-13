@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 import time
 from collections.abc import Callable
 from contextlib import suppress
@@ -31,7 +32,7 @@ from .text_utils import _collect_text, _merge_text_fragments, _text_from_content
 CHAT_URL = "https://www.doubao.com/chat/"
 SESSION_COOKIE_NAMES = {"sessionid", "sessionid_ss"}
 
-RESPONSE_POLL_INTERVAL_SECONDS = 0.2
+RESPONSE_POLL_INTERVAL_SECONDS = 0.5
 REFERENCE_POLL_INTERVAL_SECONDS = 0.3
 SEND_BUTTON_READY_TIMEOUT_SECONDS = 3.0
 REFERENCE_APPEAR_TIMEOUT_SECONDS = 10.0
@@ -1114,6 +1115,8 @@ class EmbeddedBrowserClient:
                         callback_result = reference_callback(row)
                         if inspect.isawaitable(callback_result):
                             await callback_result
+            if expected == 0:
+                break
             if expected and len(rows) >= expected:
                 break
             before = len(rows)
@@ -1162,14 +1165,17 @@ class EmbeddedBrowserClient:
             if stalled >= 5:
                 break
         if expected and len(rows) < expected:
-            snapshot = await self._debug_snapshot()
-            snapshot_path = self.user_data_dir / ".doubao-debug-snapshot.json"
-            with suppress(OSError):
-                snapshot_path.write_text(
-                    json.dumps(snapshot, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            preview = snapshot.get("bodyPreview", "")
+            snapshot: dict[str, Any] = {}
+            preview = ""
+            if os.environ.get("DOUBAO_DEBUG"):
+                snapshot = await self._debug_snapshot()
+                snapshot_path = self.user_data_dir / ".doubao-debug-snapshot.json"
+                with suppress(OSError):
+                    snapshot_path.write_text(
+                        json.dumps(snapshot, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                preview = snapshot.get("bodyPreview", "")
             raise ReferenceExpansionError(
                 f"参考资料未完整展开：页面标明 {expected} 篇，实际识别到 {len(rows)} 篇。"
                 f"页面摘要检测={snapshot.get('hasSummary', 'unknown')}，"

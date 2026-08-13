@@ -124,6 +124,9 @@ class FakeStore:
             and task.get("scheduled_at", "") <= now
         ][:limit]
 
+    def due_schedules(self, limit: int = 50) -> list[dict[str, Any]]:
+        return []
+
     def account_runtime(self, account_id: str) -> dict[str, Any]:
         return {
             "last_used_at": None,

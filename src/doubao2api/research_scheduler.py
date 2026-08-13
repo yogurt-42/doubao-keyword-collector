@@ -127,8 +127,10 @@ class ResearchScheduler:
                         task["id"],
                         f"采集调度异常：{exc}",
                     )
+            has_due_work = bool(self.store.due_tasks(limit=1) or self.store.due_schedules(limit=1))
+            poll_seconds = 2.0 if has_due_work else 5.0
             with contextlib.suppress(TimeoutError, asyncio.TimeoutError):
-                await asyncio.wait_for(self._wake_event.wait(), timeout=2)
+                await asyncio.wait_for(self._wake_event.wait(), timeout=poll_seconds)
             self._wake_event.clear()
 
     async def _check_schedules(self) -> None:

@@ -25,12 +25,17 @@
 | 14 | Web UI 与 Native 对齐（历史任务、结果增强、长尾信源、信源对比、定时任务、平台信息） | `server.py`, `models.py`, `static/index.html`, `research_export.py` |
 | 15 | URL → 平台匹配性能优化（suffix map 查找） | `research_platforms.py`, `platform_editor.py` |
 | 16 | 桌面端账号标签显示/隐藏切换 | `config.py`, `account_manager.py`, `desktop.py`, `native_dashboard.py`, `models.py`, `server.py` |
+| 17 | 性能优化专项（快照并发、调度休眠、连接复用、索引、UI 刷新、浏览器轮询） | `account_manager.py`, `research_scheduler.py`, `research_store.py`, `native_dashboard.py`, `embedded_browser_client.py`, `browser_client.py` |
 
 ---
 
 ## 待完成
 
-### Phase 3：性能优化专项
+当前暂无明确待完成阶段；后续需求再补充。
+
+---
+
+## ✅ 已完成：Phase 3 性能优化专项
 
 **目标**：降低 UI 刷新、账号快照、调度轮询和数据库访问的无效开销。
 
@@ -41,17 +46,17 @@
 - `src/doubao2api/native_dashboard.py`：非激活页刷新频率优化
 - `src/doubao2api/embedded_browser_client.py` + `browser_client.py`：浏览器轮询优化
 
-**详细任务**：
+**详细任务（已实现）**：
 
 1. **降低账号快照并发**（`account_manager.py`）
    - `snapshots()` 中使用 `asyncio.Semaphore(3)` 限制同时 `inspect_session_state()` 数量，避免大量账号同时检测导致卡顿。
 
 2. **动态调度器轮询间隔**（`research_scheduler.py`）
-   - `_run_loop()` 中，若当前无 pending 任务且无到期 schedule，则休眠 5 秒；一旦 wake 或发现任务，回到 2 秒甚至更短。
+   - `_run_loop()` 中，若当前无 pending 任务且无到期 schedule，则休眠 5 秒；一旦 wake 或发现任务，回到 2 秒。
 
 3. **优化 Native Dashboard 刷新**（`native_dashboard.py`）
    - `refresh_all()` 仅刷新当前可见内部页签所需数据。
-   - “账号环境”未激活时延长快照刷新间隔或暂停。
+   - “账号环境”未激活时延长快照刷新间隔到 10 秒。
    - “信源对比”页不加入 5 秒轮询，仅手动点击或切换时刷新。
 
 4. **数据库连接优化**（`research_store.py`）
@@ -70,7 +75,7 @@
 5. **浏览器采集轮询优化**（`embedded_browser_client.py`、`browser_client.py`）
    - 在不影响采集的前提下，将无结果轮询间隔从 0.2s 提高到 0.5s。
    - `_expand_references` 中当已收集到 `expected` 条或 `expected == 0` 时提前退出循环。
-   - 调试快照默认仅在启用调试标志时写入，或限制 body 大小。
+   - 调试快照默认仅在 `DOUBAO_DEBUG` 环境变量启用时写入，降低 I/O 开销。
 
 ### ✅ 优化：触发豆包人机验证后账号卡住无处理
 
@@ -100,7 +105,7 @@
 | 层级 | 变更 |
 |------|------|
 | `Settings` (`config.py`) | 新增 `account_tab_hidden: dict[str, bool]`（账号标签显示/隐藏，已实现） |
-| SQLite | 已新增 `research_job_templates` 表、`research_schedules` 表；已新增 `idx_research_schedules_due`；计划新增 `idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` |
+| SQLite | 已新增 `research_job_templates` 表、`research_schedules` 表；已新增 `idx_research_schedules_due`；已新增 `idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` |
 
 ---
 
@@ -204,13 +209,13 @@
 ## 推荐实施顺序
 
 ```
-Phase 1（Web UI 对齐） ✅ 已完成 → Phase 2（账号标签显示/隐藏切换） ✅ 已完成 → Phase 3（性能专项）
+Phase 1（Web UI 对齐） ✅ 已完成 → Phase 2（账号标签显示/隐藏切换） ✅ 已完成 → Phase 3（性能专项） ✅ 已完成
 ```
 
 每完成一个 Phase，先跑全量测试并验收，再进入下一个。
 
 当前剩余顺序：
-1. **性能优化**：账号快照并发限制 → 动态调度休眠 → 数据库连接复用/索引 → UI 刷新频率 → 浏览器轮询优化。
+暂无。
 
 ---
 

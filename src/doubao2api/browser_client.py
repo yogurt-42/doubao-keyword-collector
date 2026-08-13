@@ -21,7 +21,7 @@ from .text_utils import _collect_text, _merge_text_fragments, _text_from_content
 CHAT_URL = "https://www.doubao.com/chat/"
 SESSION_COOKIE_NAMES = {"sessionid", "sessionid_ss"}
 
-RESPONSE_POLL_INTERVAL_SECONDS = 0.2
+RESPONSE_POLL_INTERVAL_SECONDS = 0.5
 REFERENCE_POLL_INTERVAL_SECONDS = 0.3
 SEND_BUTTON_READY_TIMEOUT_SECONDS = 3.0
 REFERENCE_APPEAR_TIMEOUT_SECONDS = 3.0

@@ -107,7 +107,7 @@ D:\ai-source-capturer\doubao-keyword-collector
   - 每个账号有独立的 `user_data_dir`（`accounts/{account_id}`）。
   - `discover_account_ids()`：扫描 `accounts/` 目录发现账号。
   - `start_account()` / `stop_account()`：启动/停止浏览器。
-  - `snapshots()`：并发获取所有账号状态，支持失败退避。
+  - `snapshots()`：并发获取所有账号状态，使用 `asyncio.Semaphore(3)` 限制同时检测数量，支持失败退避。
   - `set_category()` / `is_tab_hidden()` / `set_tab_hidden()` / `rename_account()` / `delete_account()`：账号元数据维护。
 - 桌面模式下，客户端实例由 `desktop.py` 的 `client_factory` 创建为 `EmbeddedBrowserClient`。
 
@@ -139,7 +139,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 - `ResearchScheduler`
   - 运行在独立后台线程的 asyncio 循环中（`DesktopBackend`）。
-  - `_run_loop()`：每 2 秒轮询 `due_tasks()`，也可被 `wake()` 立即唤醒。
+  - `_run_loop()`：默认 2 秒轮询 `due_tasks()`；若无到期任务和 schedule 则休眠 5 秒。可被 `wake()` 立即唤醒。
   - `_dispatch_due_tasks()`：为每个到期任务选择可用账号并创建 worker。
   - `_run_task()`：
     - 替换 `{keyword}` 生成 prompt。
@@ -152,7 +152,8 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 - `ResearchStore`
   - SQLite 文件：`{data_root}/research.sqlite3`。
-  - WAL 模式 + 外键约束。
+  - WAL 模式 + 外键约束；`synchronous = NORMAL`、`cache_size = -32768`。
+  - 每个线程通过 `threading.local()` 复用一个连接，避免频繁开闭。
   - 核心表：
     - `research_jobs`：任务批次（name、prompt_template、status、scheduled_at、interval_seconds、max_attempts、account_ids_json）。
     - `research_tasks`：每个关键词一次执行（job_id、keyword、status、scheduled_at、account_id、attempt_count、result_count）。
@@ -254,7 +255,8 @@ D:\ai-source-capturer\doubao-keyword-collector
 - `NativeDashboard`
   - 内部 `QTabWidget` 包含 8 个页签：新建采集、账号环境、历史任务、采集结果、长尾信源、信源对比、平台信息、定时任务。
   - `DesktopBackend` 提供账号池、调度器、数据存储。
-  - 3 秒定时刷新 + 5 秒结果/对比刷新。
+  - 3 秒通用定时刷新；当当前页签为“账号环境”时刷新间隔降到 10 秒，减少账号快照开销。
+  - 结果页/信源对比页仍按需刷新。
   - 关键方法：
     - `_build_tasks_page()` / `_build_accounts_page()` / `_build_history_page()` / `_build_results_page()` / `_build_long_tail_page()` / `_build_comparison_page()` / `_build_platforms_page()` / `_build_schedules_page()`。
     - `refresh_accounts()` / `refresh_jobs()` / `refresh_history()` / `refresh_results()` / `refresh_long_tail_options()` / `refresh_source_comparison()` / `refresh_platforms()` / `refresh_schedules_page()`。
@@ -341,7 +343,7 @@ research_schedules (
 )
 ```
 
-未来可能新增索引（见 `ROADMAP.md` Phase 3）。
+已建索引参见 `research_store.py` `_initialize()`，包括 `idx_research_tasks_due`、`idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` 等。
 
 ### 6.2 关键状态机
 
@@ -381,10 +383,10 @@ research_schedules (
 
 ### 7.3 验证码/风控处理
 
-- `embedded_browser_client.py` 检测页面是否出现验证码文案或连续 JS 无响应。
-- 抛出含“验证码”/“页面无响应”的异常。
-- `research_scheduler.py` 捕获后调用 `pause_account(account_id, 1800, reason)`。
-- UI 账号卡片显示“验证已完成”按钮，点击后 `reset_captcha()` + `resume_account()` + `scheduler.wake()`。
+- `embedded_browser_client.py` 通过 body 文本、iframe URL、九宫格图片容器、拖拽元素等多路检测验证码。
+- `chat()` 检测到验证码后不再抛异常，而是设置 `self._needs_captcha = True` 并继续等待。
+- `research_scheduler.py` 的 `_run_task()` 每 3 秒检查 `_needs_captcha`，一旦为真立即 `pause_account(account_id, 1800, reason)`，同时触发 UI 跳转到该账号标签页。
+- 用户点击账号卡片“验证已完成”后，`reset_captcha()` + `resume_account()` + `scheduler.wake()`，原提问继续执行。
 
 ### 7.4 平台类型回填
 
@@ -423,6 +425,7 @@ research_schedules (
   - `research.sqlite3`：采集数据库。
   - `accounts/{account_id}/`：账号浏览器数据目录。
 - 环境变量：
+  - `DOUBAO_DEBUG`：启用时会写入 `.doubao-debug-snapshot.json` 等调试快照。
   - `DOUBAO_HOST` / `DOUBAO_PORT`
   - `DOUBAO_HEADLESS`
   - `DOUBAO_BROWSER_CHANNEL` / `DOUBAO_BROWSER_EXECUTABLE_PATH`
@@ -491,4 +494,4 @@ research_schedules (
 - 所有账号数据、Cookie、数据库均保存在本地。
 - 桌面模式依赖 PySide6 可选依赖；服务端模式不需要 GUI。
 - 页面结构变化后需要更新 `selectors.py` 中的选择器。
-- P0/P1 阶段修复、平台类型改造、长尾信源分析、定时任务、Web UI 与 Native 对齐、URL 匹配性能优化已全部完成；后续重点为账号置顶与性能优化专项（详见 `ROADMAP.md`）。
+- P0/P1 阶段修复、平台类型改造、长尾信源分析、定时任务、Web UI 与 Native 对齐、URL 匹配性能优化、账号标签显示/隐藏切换、验证码人机验证处理、Phase 3 性能优化专项均已完成。后续需求见 `ROADMAP.md`。

@@ -2474,6 +2474,11 @@ class NativeDashboard(QWidget):
             self.refresh_platforms()
 
     def _on_section_changed(self, _: int) -> None:
+        # 账号环境页不需要像任务页那样频繁刷新；未激活时降到 10 秒。
+        if self.sections.currentWidget() is self.accounts_page:
+            self.refresh_timer.setInterval(10000)
+        else:
+            self.refresh_timer.setInterval(3000)
         self.refresh_all()
         if self.sections.currentWidget() is self.long_tail_page:
             self.refresh_long_tail_options()

@@ -416,27 +416,31 @@ class BrowserAccountPool:
 
     async def snapshots(self) -> list[dict[str, Any]]:
         account_ids = self.discover_account_ids()
+        semaphore = asyncio.Semaphore(3)
 
         async def safe_snapshot(account_id: str) -> dict[str, Any]:
-            now = time.monotonic()
-            failures = self._snapshot_failures.get(account_id, 0)
-            last_attempt = self._snapshot_last_attempt.get(account_id, 0)
-            if failures > 0:
-                backoff = self._snapshot_backoff_seconds(failures)
-                if now - last_attempt < backoff:
-                    cached_error = self._snapshot_last_error.get(account_id, "账号状态检测退避中")
-                    return self._snapshot_error_state(account_id, cached_error)
-            self._snapshot_last_attempt[account_id] = now
-            try:
-                result = await asyncio.wait_for(self.snapshot(account_id), timeout=10)
-            except Exception as exc:
-                error = str(exc) or "账号状态检测超时"
-                self._snapshot_failures[account_id] = failures + 1
-                self._snapshot_last_error[account_id] = error
-                return self._snapshot_error_state(account_id, error)
-            self._snapshot_failures[account_id] = 0
-            self._snapshot_last_error.pop(account_id, None)
-            return result
+            async with semaphore:
+                now = time.monotonic()
+                failures = self._snapshot_failures.get(account_id, 0)
+                last_attempt = self._snapshot_last_attempt.get(account_id, 0)
+                if failures > 0:
+                    backoff = self._snapshot_backoff_seconds(failures)
+                    if now - last_attempt < backoff:
+                        cached_error = self._snapshot_last_error.get(
+                            account_id, "账号状态检测退避中"
+                        )
+                        return self._snapshot_error_state(account_id, cached_error)
+                self._snapshot_last_attempt[account_id] = now
+                try:
+                    result = await asyncio.wait_for(self.snapshot(account_id), timeout=10)
+                except Exception as exc:
+                    error = str(exc) or "账号状态检测超时"
+                    self._snapshot_failures[account_id] = failures + 1
+                    self._snapshot_last_error[account_id] = error
+                    return self._snapshot_error_state(account_id, error)
+                self._snapshot_failures[account_id] = 0
+                self._snapshot_last_error.pop(account_id, None)
+                return result
 
         return list(
             await asyncio.gather(*(safe_snapshot(account_id) for account_id in account_ids))

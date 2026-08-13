@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -78,13 +79,19 @@ class ResearchStore:
     def __init__(self, path: Path) -> None:
         self.path = path.resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
+        connection = getattr(self._local, "connection", None)
+        if connection is None:
+            connection = sqlite3.connect(self.path, timeout=30)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
+            connection.execute("PRAGMA cache_size = -32768")
+            self._local.connection = connection
         return connection
 
     def _initialize(self) -> None:
@@ -147,6 +154,12 @@ class ResearchStore:
                 ON research_results(account_id);
                 CREATE INDEX IF NOT EXISTS idx_research_results_date
                 ON research_results(collected_date);
+                CREATE INDEX IF NOT EXISTS idx_research_tasks_job_status
+                ON research_tasks(job_id, status);
+                CREATE INDEX IF NOT EXISTS idx_research_results_task
+                ON research_results(task_id);
+                CREATE INDEX IF NOT EXISTS idx_research_results_job_date
+                ON research_results(job_id, collected_date);
                 CREATE TABLE IF NOT EXISTS account_runtime (
                     account_id TEXT PRIMARY KEY,
                     last_used_at TEXT,
