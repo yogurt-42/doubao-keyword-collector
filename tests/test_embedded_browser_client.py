@@ -62,6 +62,13 @@ class FakeBridge:
             or 'a[data-tool-call-item-id*=\\"-result-\\"]' in script
         ):
             return []
+        # Helpers introduced to make sending more robust.
+        if ").found" in script or script.strip().endswith(".found"):
+            return True
+        if "found: Boolean(textarea)" in script:
+            return {"found": True, "value": ""}
+        if "textarea.value === ''" in script:
+            return True
         return True
 
 
@@ -80,6 +87,12 @@ class DomCompletionBridge(FakeBridge):
                 "loading": self.loading_checks == 1,
                 "referenceReady": False,
             }
+        if ").found" in script or script.strip().endswith(".found"):
+            return True
+        if "found: Boolean(textarea)" in script:
+            return {"found": True, "value": ""}
+        if "textarea.value === ''" in script:
+            return True
         return True
 
 
@@ -94,6 +107,12 @@ class CaptchaBridge(FakeBridge):
                 "captcha": True,
                 "referenceReady": False,
             }
+        if ").found" in script or script.strip().endswith(".found"):
+            return True
+        if "found: Boolean(textarea)" in script:
+            return {"found": True, "value": ""}
+        if "textarea.value === ''" in script:
+            return True
         return True
 
 
@@ -155,6 +174,16 @@ class DelayedReadyBridge(FakeBridge):
         self.send_button_checks = 0
 
     async def run_javascript(self, account_name: str, script: str) -> Any:
+        if "found: Boolean(textarea)" in script:
+            self.textarea_checks += 1
+            return {
+                "found": self.textarea_checks >= 2,
+                "value": "",
+            }
+        if ").found" in script or script.strip().endswith(".found"):
+            return True
+        if "textarea.value === ''" in script:
+            return True
         if "textarea.semi-input-textarea" in script and "return Boolean(textarea)" in script:
             self.textarea_checks += 1
             if self.textarea_checks < 2:

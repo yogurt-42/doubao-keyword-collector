@@ -40,6 +40,7 @@ class BlockingClient(FakeClient):
 
 class MultiAccountPool:
     def __init__(self) -> None:
+        self.store = FakeSettingsStore(auto_start_all_accounts=False)
         self.release = asyncio.Event()
         self.started = {
             "账号1": asyncio.Event(),
@@ -61,7 +62,20 @@ class MultiAccountPool:
         return self.accounts[account_id]
 
 
+class FakeSettings:
+    def __init__(self, auto_start_all_accounts: bool = False) -> None:
+        self.auto_start_all_accounts = auto_start_all_accounts
+
+
+class FakeSettingsStore:
+    def __init__(self, auto_start_all_accounts: bool = False) -> None:
+        self.settings = FakeSettings(auto_start_all_accounts)
+
+
 class FakePool:
+    def __init__(self, auto_start_all_accounts: bool = False) -> None:
+        self.store = FakeSettingsStore(auto_start_all_accounts)
+
     def discover_account_ids(self) -> list[str]:
         return ["账号1"]
 
@@ -70,7 +84,8 @@ class FakePool:
 
 
 class ClosedAccountPool(FakePool):
-    def __init__(self) -> None:
+    def __init__(self, auto_start_all_accounts: bool = True) -> None:
+        super().__init__(auto_start_all_accounts)
         self.start_calls = 0
         self._started: FakeAccount | None = None
 
@@ -226,6 +241,22 @@ async def test_scheduler_starts_closed_account_automatically() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scheduler_skips_closed_account_when_auto_start_disabled() -> None:
+    store = FakeStore()
+    store.tasks[1]["scheduled_at"] = (local_now() + timedelta(seconds=30)).isoformat(
+        timespec="seconds"
+    )
+    pool = ClosedAccountPool(auto_start_all_accounts=False)
+    scheduler = ResearchScheduler(store, pool)  # type: ignore[arg-type]
+
+    await scheduler._dispatch_due_tasks()
+
+    assert pool.start_calls == 0
+    assert store.started == []
+    assert "未启动" in scheduler._selection_wait_reason
+
+
+@pytest.mark.asyncio
 async def test_scheduler_can_overlap_work_on_different_accounts() -> None:
     store = FakeStore()
     # 先只让第一个任务到期，第二个任务随后手动放行
@@ -293,6 +324,7 @@ async def test_scheduler_cancels_running_worker() -> None:
 
 class ThreeAccountPool:
     def __init__(self) -> None:
+        self.store = FakeSettingsStore(auto_start_all_accounts=False)
         self.release = asyncio.Event()
         self.started = {account_id: asyncio.Event() for account_id in ["账号1", "账号2", "账号3"]}
         self.accounts = {
@@ -369,6 +401,7 @@ class CaptchaStore(FakeStore):
 
 class CaptchaAccountPool:
     def __init__(self) -> None:
+        self.store = FakeSettingsStore(auto_start_all_accounts=False)
         self.client = CaptchaClient()
         self.account = type("Account", (), {"client": self.client})()
 
@@ -424,6 +457,7 @@ async def test_scheduler_releases_account_after_task_timeout(monkeypatch) -> Non
 
 class LRUAccountPool:
     def __init__(self) -> None:
+        self.store = FakeSettingsStore(auto_start_all_accounts=False)
         self.accounts = {account_id: FakeAccount() for account_id in ["账号1", "账号2", "账号3"]}
 
     def discover_account_ids(self) -> list[str]:

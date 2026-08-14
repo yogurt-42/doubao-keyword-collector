@@ -34,9 +34,9 @@ SESSION_COOKIE_NAMES = {"sessionid", "sessionid_ss"}
 
 RESPONSE_POLL_INTERVAL_SECONDS = 0.5
 REFERENCE_POLL_INTERVAL_SECONDS = 0.3
-SEND_BUTTON_READY_TIMEOUT_SECONDS = 3.0
+SEND_BUTTON_READY_TIMEOUT_SECONDS = 8.0
 REFERENCE_APPEAR_TIMEOUT_SECONDS = 10.0
-NEW_CONVERSATION_READY_TIMEOUT_SECONDS = 5.0
+NEW_CONVERSATION_READY_TIMEOUT_SECONDS = 8.0
 PAGE_HEALTH_PING_TIMEOUT_SECONDS = 5.0
 MAX_SCRIPT_TIMEOUT_STREAK = 2
 CAPTCHA_STALL_SECONDS = 30.0
@@ -467,6 +467,241 @@ class EmbeddedBrowserClient:
         except Exception:
             return False
 
+    async def _ensure_new_conversation(self) -> None:
+        """Open a fresh empty conversation before typing the next keyword.
+
+        The most reliable way is to navigate to the base chat URL: this preserves
+        the login session and loads a brand-new empty conversation. After the page
+        loads we also try to click the sidebar "新对话" button, in case the
+        navigated page restored an existing conversation. If neither produces a
+        blank composer, we raise so the caller never types into a stale dialog.
+        """
+
+        new_conversation_script = r"""
+            (() => {
+              const visible = node => {
+                const style = getComputedStyle(node);
+                const box = node.getBoundingClientRect();
+                return style.display !== 'none'
+                  && style.visibility !== 'hidden'
+                  && box.width > 0 && box.height > 0;
+              };
+              const roles = __NEW_CHAT_ROLES__;
+              const label = [...document.querySelectorAll(roles.join(','))]
+                .find(node => visible(node)
+                  && (node.textContent || '').trim() === __NEW_CHAT_TEXT__);
+              if (!label) return false;
+              const target = label.closest('[class*="sidebar_nav_item"]')
+                || label.closest('[class*="nav-link-"]')
+                || label.closest('button,[role="button"],a')
+                || label.parentElement
+                || label;
+              target.scrollIntoView({ block: 'center' });
+              const rect = target.getBoundingClientRect();
+              const x = rect.left + rect.width / 2;
+              const y = rect.top + rect.height / 2;
+              const opts = {
+                bubbles: true, cancelable: true, view: window,
+                clientX: x, clientY: y,
+              };
+              target.dispatchEvent(new PointerEvent('pointerdown', opts));
+              target.dispatchEvent(new MouseEvent('mousedown', opts));
+              target.dispatchEvent(new PointerEvent('pointerup', opts));
+              target.dispatchEvent(new MouseEvent('mouseup', opts));
+              target.dispatchEvent(new MouseEvent('click', opts));
+              target.click();
+              return true;
+            })()
+            """.replace(
+            "__NEW_CHAT_ROLES__",
+            js_selector_list(SELECTORS["new_chat"]["roles"]),
+        ).replace(
+            "__NEW_CHAT_TEXT__",
+            js_string(SELECTORS["new_chat"]["text"]),
+        )
+        textarea_state_script = r"""
+            (() => {
+              const visible = node => {
+                const box = node.getBoundingClientRect();
+                return box.width > 0 && box.height > 0;
+              };
+              const selectors = __COMPOSER_SELECTORS__;
+              const textarea = selectors.flatMap(selector =>
+                [...document.querySelectorAll(selector)]
+              ).find(node => visible(node));
+              return {
+                found: Boolean(textarea),
+                value: textarea ? (textarea.value || '') : ''
+              };
+            })()
+            """.replace(
+            "__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"])
+        )
+
+        async def has_fresh_composer() -> bool:
+            state = await self._run_script(textarea_state_script)
+            return isinstance(state, dict) and state.get("value") == ""
+
+        # Primary method: reload the base chat URL. This always gives a clean page.
+        await self.bridge.navigate(self.account_id, CHAT_URL)
+        ready = await self._wait_for_condition(
+            f"({textarea_state_script}).found",
+            timeout=NEW_CONVERSATION_READY_TIMEOUT_SECONDS,
+            interval=0.1,
+        )
+        if ready and await has_fresh_composer():
+            return
+
+        # Secondary method: if the navigated page restored an existing conversation,
+        # explicitly click the "新对话" button.
+        clicked = await self._run_script(new_conversation_script)
+        if clicked:
+            ready = await self._wait_for_condition(
+                f"({textarea_state_script}).found",
+                timeout=NEW_CONVERSATION_READY_TIMEOUT_SECONDS,
+                interval=0.1,
+            )
+            if ready and await has_fresh_composer():
+                return
+
+        raise RuntimeError("未能成功切换到新的空白对话")
+
+    async def _type_prompt(self, prompt: str) -> None:
+        """Fill the composer textarea and trigger React input events."""
+
+        type_script = r"""
+            (() => {
+              const visible = node => {
+                const box = node.getBoundingClientRect();
+                return box.width > 0 && box.height > 0;
+              };
+              const selectors = __COMPOSER_SELECTORS__;
+              const textarea = selectors.flatMap(selector =>
+                [...document.querySelectorAll(selector)]
+              ).find(node => visible(node));
+              if (!textarea) throw new Error('No chat textarea found');
+              const setter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype, 'value'
+              ).set;
+              const text = __PROMPT__;
+              setter.call(textarea, text);
+              textarea.focus();
+              textarea.selectionStart = textarea.selectionEnd = text.length;
+              [
+                new FocusEvent('focus', { bubbles: true }),
+                new KeyboardEvent('keydown', { key: text, bubbles: true, cancelable: true }),
+                new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }),
+                new Event('change', { bubbles: true }),
+                new KeyboardEvent('keyup', { key: text, bubbles: true, cancelable: true }),
+              ].forEach(event => textarea.dispatchEvent(event));
+              return true;
+            })()
+            """.replace(
+            "__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"])
+        ).replace(
+            "__PROMPT__", json.dumps(prompt, ensure_ascii=False)
+        )
+        await self._run_script(type_script)
+
+    async def _submit_prompt(self, prompt: str) -> None:
+        """Click the send button if ready; otherwise fall back to pressing Enter."""
+
+        send_button_selectors = js_selector_list(SELECTORS["send_button"])
+        send_ready_script = r"""
+            (() => {
+              const selectors = __SEND_BUTTON_SELECTORS__;
+              const button = selectors
+                .map(selector => document.querySelector(selector))
+                .find(node => node && !node.disabled
+                  && node.getAttribute('aria-disabled') !== 'true');
+              return Boolean(button);
+            })()
+            """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
+        click_send_script = r"""
+            (() => {
+              const selectors = __SEND_BUTTON_SELECTORS__;
+              const button = selectors
+                .map(selector => document.querySelector(selector))
+                .find(node => node);
+              if (!button) return false;
+              button.click();
+              return true;
+            })()
+            """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
+        composer_selectors = js_selector_list(SELECTORS["composer"])
+        textarea_empty_script = r"""
+            (() => {
+              const visible = node => {
+                const box = node.getBoundingClientRect();
+                return box.width > 0 && box.height > 0;
+              };
+              const selectors = __COMPOSER_SELECTORS__;
+              const textarea = selectors.flatMap(selector =>
+                [...document.querySelectorAll(selector)]
+              ).find(node => visible(node));
+              return textarea ? textarea.value === '' : false;
+            })()
+            """.replace("__COMPOSER_SELECTORS__", composer_selectors)
+
+        async def try_click_send() -> bool:
+            ready = await self._wait_for_condition(
+                send_ready_script,
+                timeout=SEND_BUTTON_READY_TIMEOUT_SECONDS,
+                interval=0.1,
+            )
+            if not ready:
+                return False
+            sent = await self._run_script(click_send_script)
+            if not sent:
+                return False
+            return await self._wait_for_condition(
+                textarea_empty_script,
+                timeout=2.0,
+                interval=0.1,
+            )
+
+        async def try_press_enter() -> bool:
+            enter_script = r"""
+                (() => {
+                  const visible = node => {
+                    const box = node.getBoundingClientRect();
+                    return box.width > 0 && box.height > 0;
+                  };
+                  const selectors = __COMPOSER_SELECTORS__;
+                  const textarea = selectors.flatMap(selector =>
+                    [...document.querySelectorAll(selector)]
+                  ).find(node => visible(node));
+                  if (!textarea) return false;
+                  textarea.focus();
+                  [
+                    new KeyboardEvent('keydown', {
+                      key: 'Enter', code: 'Enter', bubbles: true, cancelable: true,
+                    }),
+                    new KeyboardEvent('keypress', {
+                      key: 'Enter', code: 'Enter', bubbles: true, cancelable: true,
+                    }),
+                    new KeyboardEvent('keyup', {
+                      key: 'Enter', code: 'Enter', bubbles: true, cancelable: true,
+                    }),
+                  ].forEach(event => textarea.dispatchEvent(event));
+                  return true;
+                })()
+                """.replace("__COMPOSER_SELECTORS__", composer_selectors)
+            sent = await self._run_script(enter_script)
+            if not sent:
+                return False
+            return await self._wait_for_condition(
+                textarea_empty_script,
+                timeout=3.0,
+                interval=0.1,
+            )
+
+        if await try_click_send():
+            return
+        if await try_press_enter():
+            return
+        raise RuntimeError("豆包发送按钮尚未就绪，关键词没有发送")
+
     def _mark_needs_captcha(self, reason: str = "") -> None:
         """Mark the account as needing manual captcha resolution and reset counters."""
 
@@ -715,119 +950,10 @@ class EmbeddedBrowserClient:
                 # dashboard away from the user.
                 await self._activate_for_automation()
                 if fresh_conversation:
-                    new_conversation_script = r"""
-                        (() => {
-                          const visible = node => {
-                            const style = getComputedStyle(node);
-                            const box = node.getBoundingClientRect();
-                            return style.display !== 'none'
-                              && style.visibility !== 'hidden'
-                              && box.width > 0 && box.height > 0;
-                          };
-                          const roles = __NEW_CHAT_ROLES__;
-                          const label = [...document.querySelectorAll(roles.join(','))]
-                            .find(node => visible(node)
-                              && (node.textContent || '').trim() === __NEW_CHAT_TEXT__);
-                          if (!label) return false;
-                          const target = label.closest(
-                            'button,[role="button"],a,.group\\/sidebar_nav_item'
-                          ) || label.parentElement || label;
-                          target.click();
-                          return true;
-                        })()
-                        """.replace(
-                        "__NEW_CHAT_ROLES__",
-                        js_selector_list(SELECTORS["new_chat"]["roles"]),
-                    ).replace(
-                        "__NEW_CHAT_TEXT__",
-                        js_string(SELECTORS["new_chat"]["text"]),
-                    )
-                    clicked = await self._run_script(new_conversation_script)
-                    if not clicked:
-                        raise RuntimeError("没有找到豆包页面左侧的“新对话”按钮")
-                    textarea_ready_script = r"""
-                        (() => {
-                          const selectors = __COMPOSER_SELECTORS__;
-                          const textarea = selectors.flatMap(selector =>
-                            [...document.querySelectorAll(selector)]
-                          ).find(node => {
-                            const box = node.getBoundingClientRect();
-                            return box.width > 0 && box.height > 0;
-                          });
-                          return Boolean(textarea);
-                        })()
-                        """.replace(
-                        "__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"])
-                    )
-                    ready = await self._wait_for_condition(
-                        textarea_ready_script,
-                        timeout=NEW_CONVERSATION_READY_TIMEOUT_SECONDS,
-                        interval=0.1,
-                    )
-                    if not ready:
-                        raise RuntimeError("新对话页面加载后未找到输入框")
+                    await self._ensure_new_conversation()
                 await self._run_script(CAPTURE_SCRIPT)
-                send_script = f"""
-                (() => {{
-                  window.__doubaoEmbeddedCapture = {{
-                    events: [],
-                    done: false,
-                    error: null
-                  }};
-                  const selectors = {js_selector_list(SELECTORS["composer"])};
-                  const textarea = selectors.flatMap(selector =>
-                    [...document.querySelectorAll(selector)]
-                  ).find(node => {{
-                    const box = node.getBoundingClientRect();
-                    return box.width > 0 && box.height > 0;
-                  }});
-                  if (!textarea) throw new Error('No chat textarea found');
-                  const setter = Object.getOwnPropertyDescriptor(
-                    window.HTMLTextAreaElement.prototype, 'value'
-                  ).set;
-                  const text = {json.dumps(prompt, ensure_ascii=False)};
-                  setter.call(textarea, text);
-                  textarea.focus();
-                  textarea.dispatchEvent(new InputEvent('input', {{
-                    bubbles: true, inputType: 'insertText', data: text
-                  }}));
-                  textarea.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                  return true;
-                }})()
-                """
-                await self._run_script(send_script)
-                send_button_selectors = js_selector_list(SELECTORS["send_button"])
-                send_ready_script = r"""
-                    (() => {
-                      const selectors = __SEND_BUTTON_SELECTORS__;
-                      const button = selectors
-                        .map(selector => document.querySelector(selector))
-                        .find(node => node && !node.disabled
-                          && node.getAttribute('aria-disabled') !== 'true');
-                      return Boolean(button);
-                    })()
-                    """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
-                send_ready = await self._wait_for_condition(
-                    send_ready_script,
-                    timeout=SEND_BUTTON_READY_TIMEOUT_SECONDS,
-                    interval=0.1,
-                )
-                if not send_ready:
-                    raise RuntimeError("豆包发送按钮尚未就绪，关键词没有发送")
-                click_send_script = r"""
-                    (() => {
-                      const selectors = __SEND_BUTTON_SELECTORS__;
-                      const button = selectors
-                        .map(selector => document.querySelector(selector))
-                        .find(node => node);
-                      if (!button) return false;
-                      button.click();
-                      return true;
-                    })()
-                    """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
-                sent = await self._run_script(click_send_script)
-                if not sent:
-                    raise RuntimeError("豆包发送按钮点击失败，关键词没有发送")
+                await self._type_prompt(prompt)
+                await self._submit_prompt(prompt)
                 self._script_timeout_streak = 0
                 if not await self._ping_page():
                     self._mark_needs_captcha("页面 JavaScript 无响应")

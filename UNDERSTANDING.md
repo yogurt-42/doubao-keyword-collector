@@ -127,11 +127,12 @@ D:\ai-source-capturer\doubao-keyword-collector
   - 通过 `QtBrowserBridge` 与 Qt WebEngine 交互。
   - 关键流程 `chat()`：
     1. `inspect_session_state()` 检查登录状态。
-    2. 点击“新对话”。
-    3. 输入关键词并发送。
+    2. 点击“新对话”，并校验输入框是否为新空白会话（失败会重试）。
+    3. 输入关键词并派发 focus/keydown/input/change/keyup 事件，确保 React 状态更新。
     4. 拦截 `fetch('/chat/completion')` 流式响应。
     5. 检测验证码/页面无响应。
-    6. 展开参考资料并提取链接。
+    6. 先尝试点击发送按钮，未就绪或点击未生效时回退到按 Enter 发送，并校验输入框已清空。
+    7. 展开参考资料并提取链接。
   - `_expand_references()`：多种选择器兜底展开参考摘要。
   - `_ping_page()` / `_run_script_or_track_timeout()`：页面卡死检测。
 
@@ -145,7 +146,7 @@ D:\ai-source-capturer\doubao-keyword-collector
     - 替换 `{keyword}` 生成 prompt。
     - 调用 `account.client.chat(..., reference_callback=save_reference)`。
     - 异常时根据类型暂停账号或重试任务。
-  - 账号选择逻辑：跳过 `busy_accounts`、跳过 `paused_until` 未到期的账号、检测登录/验证码/聊天就绪状态。
+  - 账号选择逻辑：跳过 `busy_accounts`、跳过 `paused_until` 未到期的账号、检测登录/验证码/聊天就绪状态。**未启动的账号只有在 `Settings.auto_start_all_accounts=True` 时才会被自动启动，否则跳过。**
   - `_check_schedules()`：在 `_dispatch_due_tasks()` 之前检查到期的 `research_schedules`，按模板最新配置生成一次性 `research_jobs` 并推进下一次执行时间。
 
 ### 5.5 数据层：`research_store.py`

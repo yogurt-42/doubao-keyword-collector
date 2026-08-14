@@ -214,6 +214,11 @@ class ResearchScheduler:
             try:
                 account = self.account_pool.get_if_started(account_id)
                 if account is None:
+                    if not self.account_pool.store.settings.auto_start_all_accounts:
+                        self._selection_wait_reason = (
+                            f"账号 {account_id} 未启动，请到账号环境页手动启动"
+                        )
+                        continue
                     self.store.update_task_progress(
                         task["id"],
                         f"正在后台启动账号 {account_id}",
