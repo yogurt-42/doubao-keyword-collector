@@ -534,9 +534,7 @@ class EmbeddedBrowserClient:
                 value: textarea ? (textarea.value || '') : ''
               };
             })()
-            """.replace(
-            "__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"])
-        )
+            """.replace("__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"]))
 
         async def has_fresh_composer() -> bool:
             state = await self._run_script(textarea_state_script)
@@ -596,9 +594,7 @@ class EmbeddedBrowserClient:
               ].forEach(event => textarea.dispatchEvent(event));
               return true;
             })()
-            """.replace(
-            "__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"])
-        ).replace(
+            """.replace("__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"])).replace(
             "__PROMPT__", json.dumps(prompt, ensure_ascii=False)
         )
         await self._run_script(type_script)
