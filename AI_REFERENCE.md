@@ -62,8 +62,8 @@ D:\ai-source-capturer\doubao-keyword-collector
 │   ├── text_utils.py          # 文本片段合并工具
 │   └── config.py              # Settings / RuntimeConfig
 ├── tests/                     # pytest 测试
-├── AI-UNDERSTANDING.md        # AI 启动时快速上下文
-├── UNDERSTANDING.md           # 本文档
+├── CLAUDE.md        # AI 启动时快速上下文
+├── AI_REFERENCE.md           # 本文档
 ├── README.md                  # 用户文档
 └── ROADMAP.md                 # 开发路线图
 ```
@@ -495,4 +495,4 @@ research_schedules (
 - 所有账号数据、Cookie、数据库均保存在本地。
 - 桌面模式依赖 PySide6 可选依赖；服务端模式不需要 GUI。
 - 页面结构变化后需要更新 `selectors.py` 中的选择器。
-- P0/P1 阶段修复、平台类型改造、长尾信源分析、定时任务、Web UI 与 Native 对齐、URL 匹配性能优化、账号标签显示/隐藏切换、验证码人机验证处理、Phase 3 性能优化专项、应用内检查更新均已完成。当前下一阶段为“应用内自动更新”的剩余部分：后台下载 asset 与 Windows 自替换 installer，详见 `ROADMAP.md`。
+- P0/P1 阶段修复、平台类型改造、长尾信源分析、定时任务、Web UI 与 Native 对齐、URL 匹配性能优化、账号标签显示/隐藏切换、验证码人机验证处理、Phase 3 性能优化专项、应用内检查更新、应用内下载更新（双版本下载 + SHA256/兜底校验 + 本地缓存）、豆包新布局兼容均已完成。当前下一阶段为“应用内自动更新”的剩余部分：Windows 自替换 installer，详见 `ROADMAP.md`。

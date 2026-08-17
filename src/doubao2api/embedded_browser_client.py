@@ -283,60 +283,137 @@ REFERENCE_GENERIC_SCRIPT = REFERENCE_GENERIC_SCRIPT_TEMPLATE.replace(
     "__REFERENCE_SUMMARY_PATTERN__", js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
 )
 
-LOGIN_STATE_SCRIPT_TEMPLATE = r"""
+ROBUST_LOGIN_STATE_SCRIPT_TEMPLATE = r"""
 (() => {
   const visible = node => {
+    if (!node) return false;
     const style = getComputedStyle(node);
     const box = node.getBoundingClientRect();
     return style.display !== 'none' && style.visibility !== 'hidden'
       && box.width > 0 && box.height > 0;
   };
   const compact = value => (value || '').replace(/\s+/g, ' ').trim();
-  const roles = __LOGIN_ROLES__;
-  const controls = [...document.querySelectorAll(roles.join(','))].filter(visible);
-  const textPatterns = __LOGIN_TEXT_PATTERNS__;
-  const ariaPatterns = __LOGIN_ARIA_PATTERNS__;
-  const hasLoginControl = controls.some(node => {
-    const text = compact(node.innerText || node.textContent);
-    const aria = compact(
-      (node.getAttribute('aria-label') || '') + ' '
-      + (node.getAttribute('title') || '')
-    );
-    return textPatterns.some(pattern => new RegExp(pattern).test(text))
-      || ariaPatterns.some(pattern => new RegExp(pattern, 'i').test(aria));
-  });
-  const newChatText = __NEW_CHAT_TEXT__;
-  const hasNewChat = controls.some(node =>
-    compact(node.innerText || node.textContent) === newChatText
-  );
-  const body = document.body ? (document.body.innerText || '') : '';
-  const captchaPattern = __CAPTCHA_PATTERN__;
-  const hasCaptcha = new RegExp(captchaPattern).test(body);
-  const historyText = __HISTORY_TEXT__;
-  const historyLinkSelector = __HISTORY_LINK_SELECTOR__;
-  const historyMinLinks = __HISTORY_MIN_LINKS__;
-  const hasHistory = body.includes(historyText)
-    && document.querySelectorAll(historyLinkSelector).length >= historyMinLinks;
+  const textOf = node => compact(node.innerText || node.textContent);
+
+  // 1. Composer is the strongest chat-ready signal and works on both layouts.
   const composerSelectors = __COMPOSER_SELECTORS__;
   const hasComposer = composerSelectors.some(selector =>
     [...document.querySelectorAll(selector)].some(visible)
   );
+
+  // 2. Positive logged-in signals (new layout): user menu trigger / avatar.
+  const userMenuSelectors = __USER_MENU_SELECTORS__;
+  const hasUserMenu = userMenuSelectors.some(selector =>
+    [...document.querySelectorAll(selector)].some(visible)
+  );
+
+  // 3. Positive logged-in signal: visible "退出登录" / logout control.
+  const logoutText = __LOGOUT_TEXT__;
+  let hasLogoutControl = false;
+  if (logoutText) {
+    const logoutSelectors = ['button', 'a', '[role="menuitem"]', '[role="button"]'];
+    for (const sel of logoutSelectors) {
+      for (const node of document.querySelectorAll(sel)) {
+        if (visible(node) && textOf(node) === logoutText) {
+          hasLogoutControl = true;
+          break;
+        }
+      }
+      if (hasLogoutControl) break;
+    }
+  }
+
+  // 4. Negative signal: visible login/register controls.
+  const loginSelectors = __LOGIN_SELECTORS__;
+  const loginTextPatterns = __LOGIN_TEXT_PATTERNS__;
+  const ariaPatterns = __LOGIN_ARIA_PATTERNS__;
+  let hasLoginControl = false;
+  for (const sel of loginSelectors) {
+    for (const node of document.querySelectorAll(sel)) {
+      if (!visible(node)) continue;
+      const text = textOf(node);
+      const aria = compact(
+        (node.getAttribute('aria-label') || '') + ' '
+        + (node.getAttribute('title') || '')
+      );
+      if (
+        loginTextPatterns.some(pattern => new RegExp(pattern).test(text))
+        || ariaPatterns.some(pattern => new RegExp(pattern, 'i').test(aria))
+      ) {
+        hasLoginControl = true;
+        break;
+      }
+    }
+    if (hasLoginControl) break;
+  }
+
+  // 5. "New conversation" button (sidebar). Fast path first, then fallback.
+  const newChatText = __NEW_CHAT_TEXT__;
+  const newChatSelectors = ['button', 'a', '[role="button"]'];
+  let hasNewChat = false;
+  for (const sel of newChatSelectors) {
+    for (const node of document.querySelectorAll(sel)) {
+      if (visible(node) && textOf(node) === newChatText) {
+        hasNewChat = true;
+        break;
+      }
+    }
+    if (hasNewChat) break;
+  }
+  // Fallback for new-layout spans inside sidebar/navigation containers.
+  if (!hasNewChat) {
+    const containers = document.querySelectorAll(
+      '[class*="sidebar"], [class*="nav"], aside, [data-slot="sidebar"]'
+    );
+    for (const container of containers) {
+      if (!visible(container)) continue;
+      const spans = container.querySelectorAll('span.font-medium, span');
+      for (const span of spans) {
+        if (visible(span) && textOf(span) === newChatText) {
+          hasNewChat = true;
+          break;
+        }
+      }
+      if (hasNewChat) break;
+    }
+  }
+
+  // 6. History list (old layout mainly).
+  const historyText = __HISTORY_TEXT__;
+  const historyLinkSelector = __HISTORY_LINK_SELECTOR__;
+  const historyMinLinks = __HISTORY_MIN_LINKS__;
+  const body = document.body ? (document.body.innerText || '') : '';
+  const hasHistory = body.includes(historyText)
+    && document.querySelectorAll(historyLinkSelector).length >= historyMinLinks;
+
+  // 7. Captcha / risk detection.
+  const captchaPattern = __CAPTCHA_PATTERN__;
+  const hasCaptcha = new RegExp(captchaPattern).test(body);
+
+  // Final decision: positive signals win over negative signals when ambiguous.
+  const loggedIn = hasUserMenu || hasLogoutControl
+    || (!hasLoginControl && hasComposer && (hasNewChat || hasHistory));
+
   return {
     ready: document.readyState !== 'loading',
     hasLoginControl,
+    hasUserMenu,
+    hasLogoutControl,
     hasNewChat,
     hasHistory,
     hasComposer,
     hasCaptcha,
-    loggedIn: !hasLoginControl && hasComposer && (hasNewChat || hasHistory)
+    loggedIn
   };
 })()
 """
 
 LOGIN_STATE_SCRIPT = (
-    LOGIN_STATE_SCRIPT_TEMPLATE.replace(
-        "__LOGIN_ROLES__", js_selector_list(SELECTORS["new_chat"]["roles"])
+    ROBUST_LOGIN_STATE_SCRIPT_TEMPLATE.replace(
+        "__USER_MENU_SELECTORS__", js_selector_list(SELECTORS["user_menu_trigger"])
     )
+    .replace("__LOGOUT_TEXT__", js_string(SELECTORS.get("logout_text", "")))
+    .replace("__LOGIN_SELECTORS__", js_selector_list(SELECTORS["login_controls"]["selectors"]))
     .replace(
         "__LOGIN_TEXT_PATTERNS__",
         js_selector_list(SELECTORS["login_controls"]["text_patterns"]),
@@ -480,16 +557,36 @@ class EmbeddedBrowserClient:
         new_conversation_script = r"""
             (() => {
               const visible = node => {
+                if (!node) return false;
                 const style = getComputedStyle(node);
                 const box = node.getBoundingClientRect();
                 return style.display !== 'none'
                   && style.visibility !== 'hidden'
                   && box.width > 0 && box.height > 0;
               };
-              const roles = __NEW_CHAT_ROLES__;
-              const label = [...document.querySelectorAll(roles.join(','))]
-                .find(node => visible(node)
-                  && (node.textContent || '').trim() === __NEW_CHAT_TEXT__);
+              const compact = value => (value || '').replace(/\s+/g, ' ').trim();
+              const newChatText = __NEW_CHAT_TEXT__;
+              let label = null;
+              // Fast path: clickable elements only.
+              for (const sel of ['button', 'a', '[role="button"]']) {
+                label = [...document.querySelectorAll(sel)].find(node =>
+                  visible(node) && compact(node.innerText || node.textContent) === newChatText
+                );
+                if (label) break;
+              }
+              // Fallback: spans inside sidebar/navigation containers.
+              if (!label) {
+                const containers = document.querySelectorAll(
+                  '[class*="sidebar"], [class*="nav"], aside, [data-slot="sidebar"]'
+                );
+                for (const container of containers) {
+                  if (!visible(container)) continue;
+                  label = [...container.querySelectorAll('span.font-medium, span')].find(node =>
+                    visible(node) && compact(node.innerText || node.textContent) === newChatText
+                  );
+                  if (label) break;
+                }
+              }
               if (!label) return false;
               const target = label.closest('[class*="sidebar_nav_item"]')
                 || label.closest('[class*="nav-link-"]')
@@ -513,9 +610,6 @@ class EmbeddedBrowserClient:
               return true;
             })()
             """.replace(
-            "__NEW_CHAT_ROLES__",
-            js_selector_list(SELECTORS["new_chat"]["roles"]),
-        ).replace(
             "__NEW_CHAT_TEXT__",
             js_string(SELECTORS["new_chat"]["text"]),
         )

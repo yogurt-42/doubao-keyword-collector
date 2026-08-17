@@ -128,8 +128,8 @@ doubao-keyword-collector/
 │   └── static/index.html         # Web 管理端
 ├── tests/                        # pytest 测试
 ├── README.md                     # 本文件
-├── AI-UNDERSTANDING.md           # AI 快速上下文
-├── UNDERSTANDING.md              # 详细技术参考
+├── CLAUDE.md                     # AI 启动上下文（自动加载）
+├── AI_REFERENCE.md               # AI 深度技术参考
 └── ROADMAP.md                    # 开发路线图
 ```
 

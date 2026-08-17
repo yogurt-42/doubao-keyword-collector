@@ -54,9 +54,21 @@ SELECTORS = {
     "reference_more_text": MORE_REFERENCES_TEXT,
     # Login detection: controls that indicate the user is not logged in.
     "login_controls": {
+        "selectors": ["button", "a", '[role="button"]'],
         "text_patterns": [r"^登录$", r"^注册$", r"^登录/注册$"],
         "aria_patterns": [r"^登录$", r"^login$"],
     },
+    # Logged-in user menu / avatar (new layout strong positive signal).
+    "user_menu_trigger": [
+        '[data-slot="dropdown-menu-trigger"]',
+        "img.rounded-full",
+        '[class*="avatar"]',
+    ],
+    "logout_text": "退出登录",
+    "user_name_indicator": [
+        '[data-slot="dropdown-menu-trigger"] span',
+        "img.rounded-full + div span",
+    ],
     # History detection: presence means the account has previous chats.
     "history_indicator": {
         "text": "历史对话",

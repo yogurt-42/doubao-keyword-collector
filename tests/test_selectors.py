@@ -23,6 +23,9 @@ def test_selectors_has_required_keys() -> None:
         "reference_expand",
         "reference_more_text",
         "login_controls",
+        "user_menu_trigger",
+        "logout_text",
+        "user_name_indicator",
         "history_indicator",
         "captcha_patterns",
     }

@@ -1,12 +1,12 @@
 # AI 快速上下文：豆包关键词资料采集器
 
-> 启动时先读本文档，可在 2 分钟内建立项目全局认知。如需实现细节，再读 `UNDERSTANDING.md`。
+> 启动时先读本文档，可在 2 分钟内建立项目全局认知。如需实现细节，再读 `AI_REFERENCE.md`。
 
 ---
 
 ## 1. 项目定位
 
-**豆包关键词资料采集器** `v1.0.0`
+**豆包关键词资料采集器** `v1.0.2`
 
 本地优先的非官方关键词调研工具：管理多个豆包账号，批量提问，自动展开回答中的“参考资料”区域，提取资料链接、平台名、平台类型，存入本地 SQLite，支持筛选、导出 Excel、信源对比、长尾信源分析。
 
@@ -43,7 +43,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 │   ├── windows_entry.py          # 桌面 EXE 入口
 │   ├── __main__.py               # 服务端入口
 │   ├── desktop.py                # Qt 主窗口、账号标签、浏览器桥接
-│   ├── native_dashboard.py       # 原生管理面板（7 个页签）
+│   ├── native_dashboard.py       # 原生管理面板（8 个页签）
 │   ├── account_manager.py        # 账号池
 │   ├── browser_client.py         # Playwright 客户端
 │   ├── embedded_browser_client.py# Qt WebEngine 客户端
@@ -58,9 +58,9 @@ D:\ai-source-capturer\doubao-keyword-collector
 ├── tests/                        # pytest 测试
 ├── packaging/                    # PyInstaller 打包
 ├── README.md                     # 用户文档
-├── UNDERSTANDING.md              # 技术人员/AI 详细参考
+├── AI_REFERENCE.md              # 技术人员/AI 详细参考
 ├── ROADMAP.md                    # 已完成与待完成计划
-└── AI-UNDERSTANDING.md           # 本文档
+└── AI-AI_REFERENCE.md           # 本文档
 ```
 
 ---
@@ -137,6 +137,8 @@ D:\ai-source-capturer\doubao-keyword-collector
 - 验证码/人机验证处理优化：除 body 文本外，新增 iframe、九宫格图片、拖拽元素等视觉检测；检测到验证时调度器立即暂停账号 30 分钟，当前 chat 继续等待；隐藏账号触发验证时自动显示并跳转。
 - Phase 3 性能优化专项：账号快照 `Semaphore(3)` 并发限制、调度器空闲时 5 秒动态休眠、SQLite 连接按线程复用 + NORMAL/sync + 32MB cache + 补充三个索引、Native Dashboard 账号环境页 10 秒慢刷新、浏览器轮询间隔 0.2s→0.5s、参考资料展开提前退出、调试快照默认受 `DOUBAO_DEBUG` 控制。
 - 应用内检查更新：新增 `update_checker.py` 封装 GitHub Releases API，支持语义化版本比较、单文件/便携版 asset 匹配；API 被限流时退化为读取 `/releases/latest` 的 302 跳转地址。Native Dashboard 新增“检查更新”页签，支持启动时自动检查、手动检查、显示 Release notes、打开 Release 下载页面。
+- 应用内下载更新（Task 4）：检查更新页签支持分别下载“单文件版”和“便携版”，带进度条，下载完成后做 SHA256 或完整性兜底校验，并显示本地文件路径；更新信息本地缓存，同版本重复打开时直接读取本地文案。
+- 豆包新布局兼容：优化 `embedded_browser_client.py` 登录状态检测，增加用户头像/菜单、退出登录等正向信号，避免全页扫描 `div` 导致新布局账号超时误判为“未登入”。
 
 ---
 
@@ -144,8 +146,8 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | 平台类型改造、平台信息管理、信源分布、信源对比、账号暂停/恢复、历史任务导出/重命名/同步平台信息、长尾信源分析、定时任务（Native/Web）、Web UI 与 Native 对齐、URL 匹配性能优化、账号标签显示/隐藏切换、Phase 3 性能优化专项、应用内检查更新（版本检查 + 页签 + API 退化方案） |
-| 🚧 已规划 | 应用内自动更新后续：后台下载 asset、Windows 自替换 updater、安装失败回滚 |
+| ✅ 已完成 | 平台类型改造、平台信息管理、信源分布、信源对比、账号暂停/恢复、历史任务导出/重命名/同步平台信息、长尾信源分析、定时任务（Native/Web）、Web UI 与 Native 对齐、URL 匹配性能优化、账号标签显示/隐藏切换、Phase 3 性能优化专项、应用内检查更新（版本检查 + 页签 + API 退化方案）、应用内下载更新（双版本下载 + 校验 + 本地缓存）、豆包新布局兼容 |
+| 🚧 已规划 | 应用内自动更新后续：Windows 自替换 updater、安装失败回滚 |
 
 ---
 

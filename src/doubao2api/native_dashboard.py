@@ -73,7 +73,15 @@ from .research_export import build_results_workbook  # noqa: E402
 from .research_import import normalize_keywords, parse_keyword_file  # noqa: E402
 from .research_scheduler import ResearchScheduler  # noqa: E402
 from .research_store import ResearchStore  # noqa: E402
-from .update_checker import UpdateChecker, UpdateInfo, _normalize_version  # noqa: E402
+from .update_checker import (  # noqa: E402
+    DownloadResult,
+    UpdateChecker,
+    UpdateInfo,
+    _detect_variant,
+    _normalize_version,
+    load_cached_update_info,
+    save_cached_update_info,
+)
 
 DEFAULT_PROMPT = "{keyword}"
 STATUS_TEXT = {
@@ -849,6 +857,7 @@ class DesktopBackend:
 
 class NativeDashboard(QWidget):
     captcha_detected = Signal(str)
+    download_progress = Signal(int, int)
 
     def __init__(self, backend: DesktopBackend, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -856,6 +865,7 @@ class NativeDashboard(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.backend = backend
         self.captcha_detected.connect(self._on_captcha_detected)
+        self.download_progress.connect(self._on_download_progress)
         backend.scheduler.on_captcha_callback = self.captcha_detected.emit
 
         self.pending: list[PendingOperation] = []
@@ -877,6 +887,10 @@ class NativeDashboard(QWidget):
         self._window_was_fullscreen = False
         self.editing_template_id: str | None = None
         self.refreshing_schedules = False
+        self._current_update_info: UpdateInfo | None = None
+        self._downloaded_paths: dict[str, Path] = {}
+        self._downloading_variant: str | None = None
+        self._update_download_dir = Path(self.backend.settings_store.data_root) / "updates"
         self._build_ui()
         self._apply_style()
         self.escape_shortcut = QShortcut(QKeySequence("Esc"), self)
@@ -893,6 +907,7 @@ class NativeDashboard(QWidget):
         self.result_timer.start(3000)
         QTimer.singleShot(100, self.refresh_all)
         QTimer.singleShot(250, self.restore_account_sessions)
+        QTimer.singleShot(500, self._load_cached_update_info)
         QTimer.singleShot(3000, self._auto_check_update_if_enabled)
 
     def restore_account_sessions(self) -> None:
@@ -1692,7 +1707,14 @@ class NativeDashboard(QWidget):
         layout.setSpacing(14)
 
         current_row = QHBoxLayout()
-        self.update_current_version_label = QLabel(f"当前版本：v{__version__}")
+        variant_names = {
+            "single": "单文件版",
+            "portable": "便携版",
+            "unknown": "开发环境",
+        }
+        current_variant = _detect_variant()
+        variant_text = variant_names.get(current_variant, current_variant)
+        self.update_current_version_label = QLabel(f"当前版本：v{__version__}（{variant_text}）")
         current_row.addWidget(self.update_current_version_label)
         current_row.addStretch()
         self.update_auto_check_checkbox = QCheckBox("启动时自动检查更新")
@@ -1719,6 +1741,10 @@ class NativeDashboard(QWidget):
         info_layout = QVBoxLayout(info_group)
         info_layout.setSpacing(10)
 
+        self.update_local_version_label = QLabel(f"本地版本：v{__version__}")
+        self.update_local_version_label.setObjectName("muted")
+        info_layout.addWidget(self.update_local_version_label)
+
         self.update_latest_version_label = QLabel("最新版本：—")
         self.update_published_at_label = QLabel("发布时间：—")
         info_layout.addWidget(self.update_latest_version_label)
@@ -1729,18 +1755,55 @@ class NativeDashboard(QWidget):
         self.update_release_notes.setPlaceholderText("更新内容将显示在这里")
         self.update_release_notes.setMinimumHeight(240)
         info_layout.addWidget(self.update_release_notes, 1)
+
+        self.update_progress_bar = QProgressBar()
+        self.update_progress_bar.setRange(0, 100)
+        self.update_progress_bar.setValue(0)
+        self.update_progress_bar.setTextVisible(True)
+        self.update_progress_bar.setVisible(False)
+        info_layout.addWidget(self.update_progress_bar)
+
+        self.update_downloaded_path_label = QLabel("")
+        self.update_downloaded_path_label.setWordWrap(True)
+        self.update_downloaded_path_label.setObjectName("muted")
+        self.update_downloaded_path_label.setVisible(False)
+        info_layout.addWidget(self.update_downloaded_path_label)
+
+        button_row = QHBoxLayout()
+        self.update_download_single_button = QPushButton("下载单文件版")
+        self.update_download_single_button.setObjectName("primaryButton")
+        self.update_download_single_button.setVisible(False)
+        self.update_download_single_button.clicked.connect(
+            lambda: self._start_update_download("single")
+        )
+        button_row.addWidget(self.update_download_single_button)
+
+        self.update_download_portable_button = QPushButton("下载便携版")
+        self.update_download_portable_button.setObjectName("primaryButton")
+        self.update_download_portable_button.setVisible(False)
+        self.update_download_portable_button.clicked.connect(
+            lambda: self._start_update_download("portable")
+        )
+        button_row.addWidget(self.update_download_portable_button)
+
+        self.update_install_button = QPushButton("立即安装")
+        self.update_install_button.setObjectName("primaryButton")
+        self.update_install_button.setEnabled(False)
+        self.update_install_button.setVisible(False)
+        self.update_install_button.clicked.connect(self._install_update)
+        button_row.addWidget(self.update_install_button)
+
+        button_row.addStretch()
+
+        self.update_open_release_button = QPushButton("去下载页面")
+        self.update_open_release_button.setEnabled(False)
+        self.update_open_release_button.clicked.connect(self._open_update_download_page)
+        button_row.addWidget(self.update_open_release_button)
+        info_layout.addLayout(button_row)
+
         info_group.setEnabled(False)
         self.update_info_group = info_group
         layout.addWidget(info_group, 1)
-
-        download_row = QHBoxLayout()
-        download_row.addStretch()
-        self.update_download_button = QPushButton("去下载页面")
-        self.update_download_button.setObjectName("primaryButton")
-        self.update_download_button.setEnabled(False)
-        self.update_download_button.clicked.connect(self._open_update_download_page)
-        download_row.addWidget(self.update_download_button)
-        layout.addLayout(download_row)
 
         layout.addStretch()
         self._update_download_url = ""
@@ -1760,7 +1823,10 @@ class NativeDashboard(QWidget):
 
         async def check() -> UpdateInfo | None:
             checker = UpdateChecker(current_version=__version__)
-            return await checker.fetch_latest_release()
+            info = await checker.fetch_latest_release()
+            if info is not None:
+                save_cached_update_info(self.backend.settings_store.data_root, info)
+            return info
 
         def apply(info: UpdateInfo | None) -> None:
             self._apply_update_info(info)
@@ -1777,16 +1843,26 @@ class NativeDashboard(QWidget):
             label="检查更新",
         )
 
-    def _apply_update_info(self, info: UpdateInfo | None) -> None:
+    def _load_cached_update_info(self) -> None:
+        """启动时读取本地缓存的更新信息并直接展示。"""
+        info = load_cached_update_info(self.backend.settings_store.data_root)
+        if info is not None:
+            self._apply_update_info(info, from_cache=True)
+
+    def _apply_update_info(self, info: UpdateInfo | None, *, from_cache: bool = False) -> None:
         self.update_check_button.setEnabled(True)
         self.update_info_group.setEnabled(True)
+        self._current_update_info = info
         if info is None:
             self.update_status_label.setText("检查失败：无法获取版本信息")
             self.update_latest_version_label.setText("最新版本：—")
             self.update_published_at_label.setText("发布时间：—")
             self.update_release_notes.clear()
-            self.update_download_button.setEnabled(False)
+            self.update_open_release_button.setEnabled(False)
+            self.update_downloaded_path_label.setVisible(False)
             self._update_download_url = ""
+            self._refresh_update_buttons()
+            self._refresh_downloaded_buttons(None)
             return
 
         self.update_latest_version_label.setText(f"最新版本：{info.tag_name}")
@@ -1804,15 +1880,74 @@ class NativeDashboard(QWidget):
             and _normalize_version(settings.last_ignored_version) == info.version
         )
         checker = UpdateChecker(current_version=__version__)
+        has_update = checker.is_newer(info.version)
+        cache_hint = "（来自本地缓存）" if from_cache else ""
         if ignored:
-            self.update_status_label.setText(f"已忽略版本 {info.tag_name}")
-        elif checker.is_newer(info.version):
-            self.update_status_label.setText(f"发现新版本 {info.tag_name}")
+            self.update_status_label.setText(f"已忽略版本 {info.tag_name}{cache_hint}")
+        elif has_update:
+            self.update_status_label.setText(f"发现新版本 {info.tag_name}{cache_hint}")
         else:
-            self.update_status_label.setText("已是最新版")
+            self.update_status_label.setText(f"已是最新版{cache_hint}")
 
         self._update_download_url = info.release_url
-        self.update_download_button.setEnabled(bool(info.release_url))
+        self.update_open_release_button.setEnabled(bool(info.release_url))
+
+        # 控制两个版本下载按钮的显示/可用状态
+        self._refresh_update_buttons()
+
+        # 刷新已下载文件状态
+        self._refresh_downloaded_buttons(info)
+
+    def _refresh_update_buttons(self) -> None:
+        """根据当前更新信息刷新下载按钮的显示和可用状态。"""
+        info = self._current_update_info
+        if info is None:
+            self.update_download_single_button.setVisible(False)
+            self.update_download_portable_button.setVisible(False)
+            return
+
+        checker = UpdateChecker(current_version=__version__)
+        has_update = checker.is_newer(info.version)
+        single_asset = checker.asset_for_variant(info, "single")
+        portable_asset = checker.asset_for_variant(info, "portable")
+        downloading = self._downloading_variant is not None
+
+        self.update_download_single_button.setVisible(bool(has_update and single_asset))
+        self.update_download_single_button.setEnabled(
+            bool(has_update and single_asset and not downloading)
+        )
+        self.update_download_portable_button.setVisible(bool(has_update and portable_asset))
+        self.update_download_portable_button.setEnabled(
+            bool(has_update and portable_asset and not downloading)
+        )
+
+    def _refresh_downloaded_buttons(self, info: UpdateInfo | None) -> None:
+        """根据本地已下载文件刷新按钮和路径显示。"""
+        self._downloaded_paths = {}
+        if info is None:
+            self.update_install_button.setVisible(False)
+            self.update_install_button.setEnabled(False)
+            self.update_downloaded_path_label.setVisible(False)
+            return
+
+        for variant in ("single", "portable"):
+            asset = UpdateChecker(current_version=__version__).asset_for_variant(info, variant)
+            if asset is None:
+                continue
+            path = self._update_download_dir / asset.name
+            if path.exists() and path.stat().st_size > 0:
+                self._downloaded_paths[variant] = path
+
+        any_downloaded = bool(self._downloaded_paths)
+        self.update_install_button.setVisible(any_downloaded)
+        self.update_install_button.setEnabled(any_downloaded)
+
+        if any_downloaded:
+            lines = [f"已下载：{path}" for variant, path in self._downloaded_paths.items()]
+            self.update_downloaded_path_label.setText("\n".join(lines))
+            self.update_downloaded_path_label.setVisible(True)
+        else:
+            self.update_downloaded_path_label.setVisible(False)
 
     def _format_published_at(self, published_at: str) -> str:
         if not published_at:
@@ -1830,6 +1965,90 @@ class NativeDashboard(QWidget):
         url = self._update_download_url
         if url:
             QDesktopServices.openUrl(QUrl(url))
+
+    def _start_update_download(self, variant: str) -> None:
+        info = self._current_update_info
+        if info is None:
+            return
+        checker = UpdateChecker(current_version=__version__)
+        asset = checker.asset_for_variant(info, variant)
+        if asset is None:
+            self.update_status_label.setText(f"未找到 {variant} 版本的下载链接")
+            return
+
+        self._downloading_variant = variant
+        self._refresh_update_buttons()
+        self.update_install_button.setEnabled(False)
+        self.update_progress_bar.setVisible(True)
+        self.update_progress_bar.setValue(0)
+        self.update_status_label.setText(f"正在下载 {asset.name}...")
+
+        async def download() -> DownloadResult:
+            return await checker.download_asset(
+                info,
+                asset,
+                self._update_download_dir,
+                variant=variant,
+                progress_callback=lambda d, t: self.download_progress.emit(d, t),
+            )
+
+        def apply(result: DownloadResult) -> None:
+            self._on_download_finished(result, variant)
+
+        def on_error(exc: BaseException) -> None:
+            self._on_download_error(exc)
+
+        self._watch(
+            self.backend.submit(download()),
+            apply,
+            error_callback=on_error,
+            timeout_seconds=600,
+            label=f"下载 {variant}",
+        )
+
+    def _on_download_progress(self, downloaded: int, total: int) -> None:
+        percent = int(min(100, downloaded * 100 / total)) if total > 0 else 0
+        self.update_progress_bar.setValue(percent)
+        size_mb = downloaded / (1024 * 1024)
+        if total > 0:
+            total_mb = total / (1024 * 1024)
+            self.update_status_label.setText(
+                f"已下载 {size_mb:.2f} / {total_mb:.2f} MB ({percent}%)"
+            )
+        else:
+            self.update_status_label.setText(f"已下载 {size_mb:.2f} MB")
+
+    def _on_download_finished(self, result: DownloadResult, variant: str) -> None:
+        self._downloading_variant = None
+        self._refresh_update_buttons()
+        self.update_progress_bar.setVisible(False)
+        self.update_status_label.setText(
+            f"{result.asset.name} 下载完成（{result.verification_method} 校验通过）"
+        )
+        self._downloaded_paths[variant] = result.path
+        self._refresh_downloaded_buttons(self._current_update_info)
+
+    def _on_download_error(self, exc: BaseException) -> None:
+        self._downloading_variant = None
+        self._refresh_update_buttons()
+        self.update_progress_bar.setVisible(False)
+        self.update_progress_bar.setValue(0)
+        self.update_status_label.setText(f"下载失败：{exc}")
+        self._refresh_downloaded_buttons(self._current_update_info)
+
+    def _install_update(self) -> None:
+        """Task 5 占位：目前仅打开下载目录并提示用户。"""
+        paths = list(self._downloaded_paths.values())
+        if not paths:
+            return
+        directory = paths[0].parent
+        if directory.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+        QMessageBox.information(
+            self,
+            "安装更新",
+            "自动替换安装功能将在后续版本实现。\n已为你打开下载目录，可手动覆盖安装。",
+        )
 
     def _build_schedules_page(self) -> QWidget:
         page = QWidget()

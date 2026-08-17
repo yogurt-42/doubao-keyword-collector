@@ -28,7 +28,7 @@
 | 17 | Phase 3 性能优化专项（快照并发、调度休眠、连接复用、索引、UI 刷新、浏览器轮询） | `account_manager.py`, `research_scheduler.py`, `research_store.py`, `native_dashboard.py`, `embedded_browser_client.py`, `browser_client.py` |
 | 18 | 应用内检查更新：版本检查模块、设置持久化、检查更新页签、GitHub API 速率限制退化方案 | `update_checker.py`, `config.py`, `native_dashboard.py` |
 
-> 各阶段技术细节参见 `AI-UNDERSTANDING.md` 与 `UNDERSTANDING.md`。
+> 各阶段技术细节参见 `CLAUDE.md` 与 `AI_REFERENCE.md`。
 
 ---
 
@@ -63,9 +63,9 @@
 | **Task 1：版本检查模块** | 封装 GitHub Releases API；解析 `tag_name`；语义化版本比较；匹配单文件 exe / 便携 zip asset；支持“跳过此版本”“禁用检查”；API 被限流时退化为 302 跳转方案 | `src/doubao2api/update_checker.py` | ✅ 已完成 |
 | **Task 2：设置持久化** | `Settings` 新增 `auto_check_updates`（默认 True）、`last_ignored_version`、`update_channel` | `src/doubao2api/config.py` | ✅ 已完成 |
 | **Task 3：检查更新页签** | 在 Native Dashboard 新增“检查更新”页签；支持开关、手动检查、展示 Release notes、打开下载页面 | `src/doubao2api/native_dashboard.py` | ✅ 已完成 |
-| **Task 4：下载与校验** | 后台下载 asset；若 release 提供 `.sha256` 则校验，否则做完整性兜底（大小非零、文件可执行） | `src/doubao2api/update_checker.py` | 🚧 待实现 |
+| **Task 4：下载与校验** | 后台下载 asset；分别提供单文件版 / 便携版下载按钮；带进度条；若 release 提供 `.sha256` 则校验，否则做完整性兜底（大小非零、exe MZ 头、zip 格式）；下载完成后显示本地文件路径；更新信息本地缓存 | `src/doubao2api/update_checker.py`, `src/doubao2api/native_dashboard.py` | ✅ 已完成 |
 | **Task 5：Windows 自替换 updater** | 便携版：解压 side 目录后整体替换；单文件 exe：生成临时批处理/vbs，等待原进程退出后替换 exe 并重启 | `src/doubao2api/update_installer.py`，打包脚本 | 🚧 待实现 |
-| **Task 6：测试与文档** | 版本比较、asset 匹配、URL 生成单元测试；同步 `ROADMAP.md` / `AI-UNDERSTANDING.md` / `UNDERSTANDING.md` | `tests/test_update_checker.py` + docs | 🚧 部分完成 |
+| **Task 6：测试与文档** | 版本比较、asset 匹配、下载/校验、本地缓存单元测试；同步 `ROADMAP.md` / `CLAUDE.md` / `AI_REFERENCE.md` | `tests/test_update_checker.py` + docs | ✅ 已完成 |
 
 ### 关键流程
 
@@ -217,5 +217,5 @@ python -m ruff format --check src/doubao2api tests
 
 ## 备注
 
-- `AI-UNDERSTANDING.md` 与 `UNDERSTANDING.md` 已随各阶段完成后同步更新；最新计划以本文档“下一阶段”为准。
+- `CLAUDE.md` 与 `AI_REFERENCE.md` 已随各阶段完成后同步更新；最新计划以本文档“下一阶段”为准。
 - 定时任务采用“任务模板 + 触发计划”两层模型：模板保存采集配置（不保存账号），计划保存触发规则并引用模板；计划触发时按模板最新配置生成一次性 `research_jobs`，账号由调度器按现有 LRU 逻辑动态选择。
