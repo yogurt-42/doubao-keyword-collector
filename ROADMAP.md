@@ -1,15 +1,15 @@
 # 开发路线图
 
-> 记录已完成事项与下一阶段实施计划。
-> 最近一次更新：2026-08-13
+> 记录已完成大事记与下一阶段计划。
+> 最近一次更新：2026-08-17
 
 ---
 
-## 已完成（插队优先）
+## 已完成大事记
 
 | 序号 | 功能 | 关键文件 |
 |------|------|----------|
-| 1 | 页面卡死/验证码检测 + 自动暂停 + 人工恢复 | `embedded_browser_client.py`, `research_scheduler.py` |
+| 1 | 页面卡死/验证码检测 + 自动暂停 + 人工恢复 | `embedded_browser_client.py`, `research_scheduler.py`, `native_dashboard.py` |
 | 2 | URL → 中文平台名 → 类型映射库 | `research_platforms.py` |
 | 3 | 数据层 `platform_type` 改造（列、回填、聚合、导出） | `research_store.py`, `research_export.py` |
 | 4 | 采集结果页整体滚动/布局修复 | `native_dashboard.py` |
@@ -25,93 +25,95 @@
 | 14 | Web UI 与 Native 对齐（历史任务、结果增强、长尾信源、信源对比、定时任务、平台信息） | `server.py`, `models.py`, `static/index.html`, `research_export.py` |
 | 15 | URL → 平台匹配性能优化（suffix map 查找） | `research_platforms.py`, `platform_editor.py` |
 | 16 | 桌面端账号标签显示/隐藏切换 | `config.py`, `account_manager.py`, `desktop.py`, `native_dashboard.py`, `models.py`, `server.py` |
-| 17 | 性能优化专项（快照并发、调度休眠、连接复用、索引、UI 刷新、浏览器轮询） | `account_manager.py`, `research_scheduler.py`, `research_store.py`, `native_dashboard.py`, `embedded_browser_client.py`, `browser_client.py` |
+| 17 | Phase 3 性能优化专项（快照并发、调度休眠、连接复用、索引、UI 刷新、浏览器轮询） | `account_manager.py`, `research_scheduler.py`, `research_store.py`, `native_dashboard.py`, `embedded_browser_client.py`, `browser_client.py` |
+| 18 | 应用内检查更新：版本检查模块、设置持久化、检查更新页签、GitHub API 速率限制退化方案 | `update_checker.py`, `config.py`, `native_dashboard.py` |
+
+> 各阶段技术细节参见 `AI-UNDERSTANDING.md` 与 `UNDERSTANDING.md`。
 
 ---
 
-## 待完成
+## 下一阶段：应用内自动更新（v1.1.0 规划）
 
-当前暂无明确待完成阶段；后续需求再补充。
+### 目标
 
----
+让用户在软件内部就能检查、下载并安装新版本，不必手动去 GitHub Release 页面下载覆盖。
 
-## ✅ 已完成：Phase 3 性能优化专项
+### 设计原则
 
-**目标**：降低 UI 刷新、账号快照、调度轮询和数据库访问的无效开销。
+- **优先支持便携版，再支持单文件版**：便携版解压替换最稳；单文件版需要 Windows 自替换 updater。
+- **用户可控**：默认开启“启动时检查更新”，但可在设置里关闭；支持手动检查。
+- **透明**：显示下一版本的 Release notes（body），让用户知道更新了什么。
+- **不静默更新**：下载完成后必须经用户确认才会替换文件并重启。
+- **失败可回滚**：替换前保留旧文件/文件夹为 `.bak`，安装失败时理论上可手动恢复。
 
-**涉及文件**：
-- `src/doubao2api/account_manager.py`：快照并发限制
-- `src/doubao2api/research_scheduler.py`：动态调度休眠
-- `src/doubao2api/research_store.py`：SQLite 连接线程复用、补充索引
-- `src/doubao2api/native_dashboard.py`：非激活页刷新频率优化
-- `src/doubao2api/embedded_browser_client.py` + `browser_client.py`：浏览器轮询优化
+### 新增 UI 板块
 
-**详细任务（已实现）**：
+在 Native Dashboard 最后新增一个 **“检查更新”** 页签，包含：
 
-1. **降低账号快照并发**（`account_manager.py`）
-   - `snapshots()` 中使用 `asyncio.Semaphore(3)` 限制同时 `inspect_session_state()` 数量，避免大量账号同时检测导致卡顿。
+- 当前版本号。
+- “启动时自动检查更新”开关（持久化到 `settings.json`）。
+- “立即检查更新”按钮。
+- 最新版本信息区：版本号、发布时间、Release notes（body）。
+- 下载/安装按钮与下载进度条。
 
-2. **动态调度器轮询间隔**（`research_scheduler.py`）
-   - `_run_loop()` 中，若当前无 pending 任务且无到期 schedule，则休眠 5 秒；一旦 wake 或发现任务，回到 2 秒。
+### MVP 任务拆分
 
-3. **优化 Native Dashboard 刷新**（`native_dashboard.py`）
-   - `refresh_all()` 仅刷新当前可见内部页签所需数据。
-   - “账号环境”未激活时延长快照刷新间隔到 10 秒。
-   - “信源对比”页不加入 5 秒轮询，仅手动点击或切换时刷新。
+| 任务 | 目标 | 主要文件 | 状态 |
+|------|------|----------|------|
+| **Task 1：版本检查模块** | 封装 GitHub Releases API；解析 `tag_name`；语义化版本比较；匹配单文件 exe / 便携 zip asset；支持“跳过此版本”“禁用检查”；API 被限流时退化为 302 跳转方案 | `src/doubao2api/update_checker.py` | ✅ 已完成 |
+| **Task 2：设置持久化** | `Settings` 新增 `auto_check_updates`（默认 True）、`last_ignored_version`、`update_channel` | `src/doubao2api/config.py` | ✅ 已完成 |
+| **Task 3：检查更新页签** | 在 Native Dashboard 新增“检查更新”页签；支持开关、手动检查、展示 Release notes、打开下载页面 | `src/doubao2api/native_dashboard.py` | ✅ 已完成 |
+| **Task 4：下载与校验** | 后台下载 asset；若 release 提供 `.sha256` 则校验，否则做完整性兜底（大小非零、文件可执行） | `src/doubao2api/update_checker.py` | 🚧 待实现 |
+| **Task 5：Windows 自替换 updater** | 便携版：解压 side 目录后整体替换；单文件 exe：生成临时批处理/vbs，等待原进程退出后替换 exe 并重启 | `src/doubao2api/update_installer.py`，打包脚本 | 🚧 待实现 |
+| **Task 6：测试与文档** | 版本比较、asset 匹配、URL 生成单元测试；同步 `ROADMAP.md` / `AI-UNDERSTANDING.md` / `UNDERSTANDING.md` | `tests/test_update_checker.py` + docs | 🚧 部分完成 |
 
-4. **数据库连接优化**（`research_store.py`）
-   - 使用 `threading.local()` 为每个线程保留一个 SQLite 连接（WAL 模式已启用）。
-   - 增加 `PRAGMA synchronous = NORMAL` 与 `PRAGMA cache_size = -32768`。
-   - 补充索引：
-     ```sql
-     CREATE INDEX IF NOT EXISTS idx_research_tasks_job_status
-     ON research_tasks(job_id, status);
-     CREATE INDEX IF NOT EXISTS idx_research_results_task
-     ON research_results(task_id);
-     CREATE INDEX IF NOT EXISTS idx_research_results_job_date
-     ON research_results(job_id, collected_date);
-     ```
+### 关键流程
 
-5. **浏览器采集轮询优化**（`embedded_browser_client.py`、`browser_client.py`）
-   - 在不影响采集的前提下，将无结果轮询间隔从 0.2s 提高到 0.5s。
-   - `_expand_references` 中当已收集到 `expected` 条或 `expected == 0` 时提前退出循环。
-   - 调试快照默认仅在 `DOUBAO_DEBUG` 环境变量启用时写入，降低 I/O 开销。
+1. **启动时检查**：程序启动 3 秒后异步请求 GitHub Releases API，5 秒超时；若触发未认证速率限制，退化为读取 `/releases/latest` 的 302 跳转地址，仍可拿到版本号与 Release 页面链接。
+2. **发现新版本**：比较本地版本与远端 `tag_name`；若用户已选择“跳过此版本”则不再提示。
+3. **展示 Release notes**：把 release body 以纯文本/Markdown 形式显示在“检查更新”页签。
+4. **用户点击下载**：根据当前进程形态判断自己是单文件版还是便携版，下载对应 asset 到 `%TEMP%`。
+5. **下载完成**：显示“立即安装”；用户确认后主程序退出，启动 updater。
+6. **替换与重启**：
+   - 便携版：解压新 zip 到临时目录 → 等待原进程退出 → 删除/重命名旧文件夹 → 移入新文件夹 → 启动新 exe。
+   - 单文件版：把新 exe 下载到 `%TEMP%` → 生成 `update.bat` 等待原进程退出 → 覆盖原 exe → 启动新 exe。
 
-### ✅ 优化：触发豆包人机验证后账号卡住无处理
+### 风险与缓解
 
-**现象**：实际采集时一旦豆包页面触发验证码/安全校验/人机验证，账号页面会卡住，既不暂停账号，也不提示用户人工处理；当前关键词任务一直挂起，直到所有任务跑完才按失败处理，期间调度器仍可能继续分配任务。
+| 风险 | 缓解 |
+|------|------|
+| 没有代码签名，自动下载 exe 被杀软拦截 | 只做提示+用户确认，不静默更新；允许用户只下载不安装 |
+| GitHub API 在国内不稳定或被限流 | 优先 API；触发速率限制时退化为读取 `/releases/latest` 的 302 跳转地址，仍可提示更新并跳转 Release 页面；后续可按需加镜像 fallback |
+| 单文件 exe 替换失败导致程序损坏 | 替换前保留 `.bak`；updater 检查文件存在性 |
+| 便携版路径含中文/空格 | updater 路径用双引号包裹 |
+| Release body 过长或含特殊 Markdown | 先做纯文本渲染，必要时用简单 Markdown 解析 |
 
-**已实现**：
-- 补强验证码检测：除 `body.innerText` 外，新增 iframe URL、九宫格图片容器、拖拽元素等视觉/结构检测。
-- `chat()` 检测到验证码后不再抛异常，而是标记 `_needs_captcha=True` 并继续等待；验证码清除后原提问继续运行。
-- 调度器 `_run_task()` 每 3 秒检查 `_needs_captcha`，一旦为真立即 `pause_account(account_id, 1800, ...)` 并触发 UI 跳转。
-- 账号卡片显示“已暂停—需处理验证”并展示 `pause_reason` tooltip。
-- 隐藏账号触发验证时自动恢复标签可见并 `bring_to_front()`。
+### 验收标准
 
-**涉及文件**：
-- `src/doubao2api/selectors.py`
-- `src/doubao2api/embedded_browser_client.py`
-- `src/doubao2api/research_scheduler.py`
-- `src/doubao2api/account_manager.py`
-- `src/doubao2api/native_dashboard.py`
-- `tests/test_research_scheduler.py`
-
-> 服务端 Playwright 模式（`browser_client.py`）暂未处理，后续按需补充。
+1. `pytest tests/test_update_checker.py -q` 通过。
+2. 手动测试：
+   - 启动后状态栏/页签提示新版本（或手动检查成功）。
+   - 能正确显示 Release notes。
+   - 下载完成后点击安装，旧程序退出、新版本启动。
+   - 失败时旧文件/文件夹 `.bak` 保留。
+3. `ruff check .` / `ruff format --check src/doubao2api tests` 通过。
 
 ---
 
-## 数据模型/表变更汇总
+## 历史归档
+
+以下内容为已完成阶段留下的数据模型、API/UI 变更、测试计划与风险记录，供后续查阅。
+
+### 数据模型/表变更汇总
 
 | 层级 | 变更 |
 |------|------|
 | `Settings` (`config.py`) | 新增 `account_tab_hidden: dict[str, bool]`（账号标签显示/隐藏，已实现） |
 | SQLite | 已新增 `research_job_templates` 表、`research_schedules` 表；已新增 `idx_research_schedules_due`；已新增 `idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` |
 
----
+### API/UI 变更汇总
 
-## API/UI 变更汇总
-
-### 新增后端 API
+#### 新增后端 API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -139,17 +141,15 @@
 | POST | `/admin/api/research/schedules/{id}/run` | 立即执行一次 |
 | DELETE | `/admin/api/research/schedules/{id}` | 删除计划 |
 
-### 新增 UI
+#### 新增 UI
 
 - **Native**：新增“定时任务”页签（任务模板管理 + 触发计划管理）。
 - **Web**：已扩展为 8 页签（新建采集、账号环境、历史任务、采集结果、长尾信源、信源对比、定时任务、平台信息）。
 - **Native**：账号环境卡片新增“隐藏标签/显示标签”按钮，支持隐藏后仍保持账号激活并在切换标签时恢复显示。
 
----
+### 测试计划
 
-## 测试计划
-
-### 单元测试
+#### 单元测试
 
 - `config.py`：`Settings` 序列化/反序列化 `account_tab_hidden`；重命名/删除后字典同步。
 - `research_store.py`：
@@ -161,7 +161,7 @@
 - `tests/test_account_manager.py`：账号标签隐藏状态持久化、rename/delete 迁移、snapshot 返回 `tab_hidden`。
 - `tests/test_api.py`：`POST /admin/api/accounts/{account_id}/tab-hidden` 接口测试。
 
-### 手动测试
+#### 手动测试
 
 **定时任务**
 1. 创建任务模板。
@@ -186,9 +186,7 @@
 2. 大结果集下结果页筛选和导出响应可接受。
 3. 观察 SQLite WAL 与日志，确认没有频繁建连/断连。
 
----
-
-## 风险与兼容性
+### 风险与兼容性
 
 | 风险 | 缓解 |
 |------|------|
@@ -206,23 +204,10 @@
 
 ---
 
-## 推荐实施顺序
-
-```
-Phase 1（Web UI 对齐） ✅ 已完成 → Phase 2（账号标签显示/隐藏切换） ✅ 已完成 → Phase 3（性能专项） ✅ 已完成
-```
-
-每完成一个 Phase，先跑全量测试并验收，再进入下一个。
-
-当前剩余顺序：
-暂无。
-
----
-
 ## 验收命令
 
-```cmd
-cd /d "D:\ai-source-capturer\doubao-keyword-collector"
+```bash
+cd "/d/ai-source-capturer/doubao-keyword-collector"
 python -m pytest tests/ -q
 python -m ruff check .
 python -m ruff format --check src/doubao2api tests
@@ -232,5 +217,5 @@ python -m ruff format --check src/doubao2api tests
 
 ## 备注
 
-- `AI-UNDERSTANDING.md` 与 `UNDERSTANDING.md` 已随 Phase 1/2 完成后更新；后续随 Phase 3 完成后继续补充。
+- `AI-UNDERSTANDING.md` 与 `UNDERSTANDING.md` 已随各阶段完成后同步更新；最新计划以本文档“下一阶段”为准。
 - 定时任务采用“任务模板 + 触发计划”两层模型：模板保存采集配置（不保存账号），计划保存触发规则并引用模板；计划触发时按模板最新配置生成一次性 `research_jobs`，账号由调度器按现有 LRU 逻辑动态选择。

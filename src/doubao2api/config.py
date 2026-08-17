@@ -40,6 +40,9 @@ class Settings:
     auto_replenish_account_categories: list[str] | None = None
     account_categories: dict[str, str] | None = None
     account_tab_hidden: dict[str, bool] | None = None
+    auto_check_updates: bool = True
+    last_ignored_version: str = ""
+    update_channel: str = "stable"
     video_daily_credits: int = 10
     video_15s_credit_cost: int = 4
     video_10s_credit_cost: int = 3

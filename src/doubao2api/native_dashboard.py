@@ -64,6 +64,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QWidgetAction,
 )
 
+from . import __version__  # noqa: E402
 from .account_manager import BrowserAccountPool, normalize_account_id  # noqa: E402
 from .config import RuntimeConfig, SettingsStore  # noqa: E402
 from .embedded_browser_client import EmbeddedBrowserClient  # noqa: E402
@@ -72,6 +73,7 @@ from .research_export import build_results_workbook  # noqa: E402
 from .research_import import normalize_keywords, parse_keyword_file  # noqa: E402
 from .research_scheduler import ResearchScheduler  # noqa: E402
 from .research_store import ResearchStore  # noqa: E402
+from .update_checker import UpdateChecker, UpdateInfo, _normalize_version  # noqa: E402
 
 DEFAULT_PROMPT = "{keyword}"
 STATUS_TEXT = {
@@ -891,6 +893,7 @@ class NativeDashboard(QWidget):
         self.result_timer.start(3000)
         QTimer.singleShot(100, self.refresh_all)
         QTimer.singleShot(250, self.restore_account_sessions)
+        QTimer.singleShot(3000, self._auto_check_update_if_enabled)
 
     def restore_account_sessions(self) -> None:
         account_ids = self.backend.account_pool.discover_account_ids()
@@ -976,6 +979,7 @@ class NativeDashboard(QWidget):
         self.comparison_page = self._build_comparison_page()
         self.schedules_page = self._build_schedules_page()
         self.platforms_page = self._build_platforms_page()
+        self.update_page = self._build_update_page()
         self.sections.addTab(self.tasks_page, "新建采集")
         self.sections.addTab(self.accounts_page, "账号环境")
         self.sections.addTab(self.history_page, "历史任务")
@@ -984,6 +988,7 @@ class NativeDashboard(QWidget):
         self.sections.addTab(self.comparison_page, "信源对比")
         self.sections.addTab(self.schedules_page, "定时任务")
         self.sections.addTab(self.platforms_page, "平台信息")
+        self.sections.addTab(self.update_page, "检查更新")
         self.sections.currentChanged.connect(self._on_section_changed)
         root.addWidget(self.sections, 1)
 
@@ -1679,6 +1684,152 @@ class NativeDashboard(QWidget):
         self.platform_info_table.setMinimumHeight(400)
         layout.addWidget(self.platform_info_table, 1)
         return page
+
+    def _build_update_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 8, 4, 4)
+        layout.setSpacing(14)
+
+        current_row = QHBoxLayout()
+        self.update_current_version_label = QLabel(f"当前版本：v{__version__}")
+        current_row.addWidget(self.update_current_version_label)
+        current_row.addStretch()
+        self.update_auto_check_checkbox = QCheckBox("启动时自动检查更新")
+        self.update_auto_check_checkbox.setChecked(
+            self.backend.settings_store.settings.auto_check_updates
+        )
+        self.update_auto_check_checkbox.stateChanged.connect(self._on_update_auto_check_changed)
+        current_row.addWidget(self.update_auto_check_checkbox)
+        layout.addLayout(current_row)
+
+        check_row = QHBoxLayout()
+        self.update_check_button = QPushButton("立即检查更新")
+        self.update_check_button.setObjectName("primaryButton")
+        self.update_check_button.clicked.connect(self._check_for_updates)
+        check_row.addWidget(self.update_check_button)
+        check_row.addStretch()
+        layout.addLayout(check_row)
+
+        self.update_status_label = QLabel("点击“立即检查更新”按钮开始检查")
+        self.update_status_label.setObjectName("muted")
+        layout.addWidget(self.update_status_label)
+
+        info_group = QGroupBox("最新版本信息")
+        info_layout = QVBoxLayout(info_group)
+        info_layout.setSpacing(10)
+
+        self.update_latest_version_label = QLabel("最新版本：—")
+        self.update_published_at_label = QLabel("发布时间：—")
+        info_layout.addWidget(self.update_latest_version_label)
+        info_layout.addWidget(self.update_published_at_label)
+
+        self.update_release_notes = QTextEdit()
+        self.update_release_notes.setReadOnly(True)
+        self.update_release_notes.setPlaceholderText("更新内容将显示在这里")
+        self.update_release_notes.setMinimumHeight(240)
+        info_layout.addWidget(self.update_release_notes, 1)
+        info_group.setEnabled(False)
+        self.update_info_group = info_group
+        layout.addWidget(info_group, 1)
+
+        download_row = QHBoxLayout()
+        download_row.addStretch()
+        self.update_download_button = QPushButton("去下载页面")
+        self.update_download_button.setObjectName("primaryButton")
+        self.update_download_button.setEnabled(False)
+        self.update_download_button.clicked.connect(self._open_update_download_page)
+        download_row.addWidget(self.update_download_button)
+        layout.addLayout(download_row)
+
+        layout.addStretch()
+        self._update_download_url = ""
+        return page
+
+    def _on_update_auto_check_changed(self, state: int) -> None:
+        self.backend.settings_store.update({"auto_check_updates": bool(state)})
+
+    def _auto_check_update_if_enabled(self) -> None:
+        if self.backend.settings_store.settings.auto_check_updates:
+            self._check_for_updates()
+
+    def _check_for_updates(self) -> None:
+        self.update_check_button.setEnabled(False)
+        self.update_status_label.setText("正在检查...")
+        self.update_status_label.setObjectName("muted")
+
+        async def check() -> UpdateInfo | None:
+            checker = UpdateChecker(current_version=__version__)
+            return await checker.fetch_latest_release()
+
+        def apply(info: UpdateInfo | None) -> None:
+            self._apply_update_info(info)
+
+        def on_error(exc: BaseException) -> None:
+            self.update_status_label.setText(f"检查失败：{exc}")
+            self.update_check_button.setEnabled(True)
+
+        self._watch(
+            self.backend.submit(check()),
+            apply,
+            error_callback=on_error,
+            timeout_seconds=15,
+            label="检查更新",
+        )
+
+    def _apply_update_info(self, info: UpdateInfo | None) -> None:
+        self.update_check_button.setEnabled(True)
+        self.update_info_group.setEnabled(True)
+        if info is None:
+            self.update_status_label.setText("检查失败：无法获取版本信息")
+            self.update_latest_version_label.setText("最新版本：—")
+            self.update_published_at_label.setText("发布时间：—")
+            self.update_release_notes.clear()
+            self.update_download_button.setEnabled(False)
+            self._update_download_url = ""
+            return
+
+        self.update_latest_version_label.setText(f"最新版本：{info.tag_name}")
+        self.update_published_at_label.setText(
+            f"发布时间：{self._format_published_at(info.published_at)}"
+        )
+        if hasattr(self.update_release_notes, "setMarkdown"):
+            self.update_release_notes.setMarkdown(info.release_notes or "作者未提供更新说明")
+        else:
+            self.update_release_notes.setPlainText(info.release_notes or "作者未提供更新说明")
+
+        settings = self.backend.settings_store.settings
+        ignored = (
+            settings.last_ignored_version
+            and _normalize_version(settings.last_ignored_version) == info.version
+        )
+        checker = UpdateChecker(current_version=__version__)
+        if ignored:
+            self.update_status_label.setText(f"已忽略版本 {info.tag_name}")
+        elif checker.is_newer(info.version):
+            self.update_status_label.setText(f"发现新版本 {info.tag_name}")
+        else:
+            self.update_status_label.setText("已是最新版")
+
+        self._update_download_url = info.release_url
+        self.update_download_button.setEnabled(bool(info.release_url))
+
+    def _format_published_at(self, published_at: str) -> str:
+        if not published_at:
+            return "—"
+        try:
+            from datetime import datetime, timezone
+
+            dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+            dt = dt.astimezone(timezone.utc)
+            return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+        except ValueError:
+            return published_at
+
+    def _open_update_download_page(self) -> None:
+        url = self._update_download_url
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
 
     def _build_schedules_page(self) -> QWidget:
         page = QWidget()

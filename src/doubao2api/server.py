@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from openpyxl import load_workbook
 
+from . import __version__
 from .account_manager import BrowserAccountPool, normalize_account_id
 from .browser_client import BrowserUnavailableError, LoginRequiredError
 from .config import RuntimeConfig, SettingsStore
@@ -203,7 +204,7 @@ def create_app(
 
     app = FastAPI(
         title="Doubao Account Manager",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan,
     )
     app.state.store = settings_store
@@ -267,7 +268,7 @@ def create_app(
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
-            "version": "1.0.0",
+            "version": __version__,
             "activation_required": False,
             "open_source": True,
         }
@@ -406,7 +407,7 @@ def create_app(
         return JSONResponse(
             {
                 "name": "Doubao Account Manager",
-                "version": "1.0.0",
+                "version": __version__,
                 "admin": "/admin",
                 "docs": "/docs",
                 "activation_required": False,
