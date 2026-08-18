@@ -1869,10 +1869,13 @@ class NativeDashboard(QWidget):
         self.update_published_at_label.setText(
             f"发布时间：{self._format_published_at(info.published_at)}"
         )
-        if hasattr(self.update_release_notes, "setMarkdown"):
-            self.update_release_notes.setMarkdown(info.release_notes or "作者未提供更新说明")
+        notes = info.release_notes or "作者未提供更新说明"
+        if notes.strip().startswith("<"):
+            self.update_release_notes.setHtml(notes)
+        elif hasattr(self.update_release_notes, "setMarkdown"):
+            self.update_release_notes.setMarkdown(notes)
         else:
-            self.update_release_notes.setPlainText(info.release_notes or "作者未提供更新说明")
+            self.update_release_notes.setPlainText(notes)
 
         settings = self.backend.settings_store.settings
         ignored = (

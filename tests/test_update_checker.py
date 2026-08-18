@@ -19,6 +19,19 @@ from doubao2api.update_checker import (
     update_info_to_dict,
 )
 
+_FALLBACK_RELEASE_HTML = (
+    "<!DOCTYPE html><html><body>"
+    '<nav><a href="/yogurt-42/doubao-keyword-collector/releases/tag/v1.0.2">v1.0.2</a></nav>'
+    '<div data-testid="release-body" class="markdown-body my-3">'
+    "<p>请求频率已达上限，但这里有一些 release notes。</p>"
+    "</div>"
+    '<a href="/yogurt-42/doubao-keyword-collector/releases/download/v1.0.2/'
+    'doubao-keyword-collector-v1.0.2.exe">exe</a>'
+    '<a href="/yogurt-42/doubao-keyword-collector/releases/download/v1.0.2/'
+    'doubao-keyword-collector-v1.0.2-portable.zip">zip</a>'
+    "</body></html>"
+)
+
 
 def _release_payload(version: str) -> dict[str, Any]:
     return {
@@ -155,8 +168,8 @@ async def test_fetch_latest_release_fallback_on_rate_limit(
             status_code=403,
         ),
         _FakeResponse(
-            status_code=302,
-            headers={"location": "/yogurt-42/doubao-keyword-collector/releases/tag/v1.0.2"},
+            status_code=200,
+            text=_FALLBACK_RELEASE_HTML,
         ),
     ]
     call_index = 0
@@ -190,8 +203,8 @@ async def test_check_latest_uses_fallback_when_api_rate_limited(
             status_code=403,
         ),
         _FakeResponse(
-            status_code=302,
-            headers={"location": "/yogurt-42/doubao-keyword-collector/releases/tag/v1.0.2"},
+            status_code=200,
+            text=_FALLBACK_RELEASE_HTML,
         ),
     ]
     call_index = 0

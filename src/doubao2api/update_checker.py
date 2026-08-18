@@ -405,6 +405,150 @@ class UpdateChecker:
             return None
         return self._parse_release_data(data)
 
+    async def _fetch_from_release_page_html(self) -> UpdateInfo | None:
+        """通过 GitHub Release 页面 HTML / 嵌入 JSON 获取 release 信息。"""
+        url = _GITHUB_LATEST_RELEASE_URL.format(owner=self.owner, repo=self.repo)
+        headers = {"User-Agent": self._user_agent()}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                text = response.text
+                page_url = str(response.url)
+        except Exception:  # noqa: BLE001
+            return None
+
+        info = self._parse_release_html_embedded(text, page_url)
+        if info is not None:
+            return info
+        return self._parse_release_html_regex(text, page_url)
+
+    def _parse_release_html_embedded(self, html: str, page_url: str) -> UpdateInfo | None:
+        """尝试解析 GitHub 页面中的 react-app.embeddedData JSON。"""
+        match = re.search(
+            r'<script[^>]*type="application/json"[^>]*data-target="react-app\.embeddedData"[^>]*>(.*?)</script>',
+            html,
+            re.S,
+        )
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return None
+
+        payload = data.get("payload", {}) if isinstance(data, dict) else {}
+        release = payload.get("release") if isinstance(payload, dict) else None
+        if not isinstance(release, dict):
+            return None
+
+        tag_name = release.get("tagName") or release.get("tag_name") or ""
+        version = _normalize_version(tag_name)
+        if not version:
+            return None
+
+        title = release.get("name") or ""
+        published_at = release.get("publishedAt") or release.get("published_at") or ""
+        body = release.get("body") or ""
+
+        release_assets: list[dict[str, Any]] = []
+        assets_node = release.get("releaseAssets")
+        if isinstance(assets_node, dict):
+            release_assets = assets_node.get("nodes", []) or []
+        elif isinstance(assets_node, list):
+            release_assets = assets_node
+
+        asset_dicts: list[dict[str, object]] = []
+        for asset in release_assets:
+            if not isinstance(asset, dict):
+                continue
+            name = asset.get("name") or ""
+            download_url = (
+                asset.get("downloadUrl")
+                or asset.get("download_url")
+                or asset.get("browser_download_url")
+                or ""
+            )
+            if not name or not download_url:
+                continue
+            if not download_url.startswith("http"):
+                download_url = str(httpx.URL(page_url).join(download_url))
+            asset_dicts.append(
+                {
+                    "name": name,
+                    "browser_download_url": download_url,
+                    "size": asset.get("size", 0),
+                }
+            )
+
+        matched = self._match_assets(asset_dicts, version)
+        guessed = self._guessed_assets(version, tag_name)
+        for variant in ("single", "portable", "single_sha256", "portable_sha256"):
+            if variant not in matched and variant in guessed:
+                matched[variant] = guessed[variant]
+
+        return UpdateInfo(
+            version=version,
+            tag_name=tag_name,
+            title=str(title),
+            published_at=str(published_at),
+            release_notes=str(body),
+            release_url=f"https://github.com/{self.owner}/{self.repo}/releases/tag/{tag_name}",
+            assets=matched,
+        )
+
+    def _parse_release_html_regex(self, html: str, page_url: str) -> UpdateInfo | None:
+        """用正则从 Release 页面 HTML 中抽取信息（兜底）。"""
+        tag_match = re.search(r'href="[^"]*/releases/tag/([^"]+)"', html)
+        if not tag_match:
+            tag_match = re.search(r"/releases/tag/([^/\s]+)", page_url)
+        tag_name = tag_match.group(1) if tag_match else ""
+        version = _normalize_version(tag_name)
+        if not version:
+            return None
+
+        published_at = ""
+        time_match = re.search(r'<(?:relative-time|time)[^>]*datetime="([^"]+)"', html)
+        if time_match:
+            published_at = time_match.group(1)
+
+        body = ""
+        for pattern in (
+            r'<div[^>]*data-testid="release-body"[^>]*>(.*?)</div>',
+            r'<div[^>]*class="[^"]*markdown-body[^"]*"[^>]*>(.*?)</div>',
+        ):
+            body_match = re.search(pattern, html, re.S)
+            if body_match:
+                body = body_match.group(1)
+                break
+
+        asset_dicts: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for href in re.findall(r'href="(/[^"]*/releases/download/[^"]+)"', html):
+            if href in seen:
+                continue
+            seen.add(href)
+            name = Path(href).name
+            url = str(httpx.URL(page_url).join(href))
+            asset_dicts.append({"name": name, "browser_download_url": url, "size": 0})
+
+        matched = self._match_assets(asset_dicts, version)
+        guessed = self._guessed_assets(version, tag_name)
+        for variant in ("single", "portable", "single_sha256", "portable_sha256"):
+            if variant not in matched and variant in guessed:
+                matched[variant] = guessed[variant]
+
+        return UpdateInfo(
+            version=version,
+            tag_name=tag_name,
+            title="",
+            published_at=published_at,
+            release_notes=body
+            or "GitHub API 请求频率已达上限，更新内容暂无法显示，请前往 Release 页面查看。",
+            release_url=f"https://github.com/{self.owner}/{self.repo}/releases/tag/{tag_name}",
+            assets=matched,
+        )
+
     async def _fetch_from_release_page_redirect(self) -> UpdateInfo | None:
         """通过 GitHub Release 页面 302 跳转地址获取版本号（退化方案）。"""
         url = _GITHUB_LATEST_RELEASE_URL.format(owner=self.owner, repo=self.repo)
@@ -444,6 +588,8 @@ class UpdateChecker:
         """
         info = await self._fetch_from_api()
         if info is None:
+            info = await self._fetch_from_release_page_html()
+        if info is None:
             info = await self._fetch_from_release_page_redirect()
         if info is None:
             return None
@@ -462,6 +608,8 @@ class UpdateChecker:
         任何网络或解析异常都会被吞掉并返回 None。
         """
         info = await self._fetch_from_api()
+        if info is None:
+            info = await self._fetch_from_release_page_html()
         if info is None:
             info = await self._fetch_from_release_page_redirect()
         return info

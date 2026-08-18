@@ -60,7 +60,7 @@
 
 | 任务 | 目标 | 主要文件 | 状态 |
 |------|------|----------|------|
-| **Task 1：版本检查模块** | 封装 GitHub Releases API；解析 `tag_name`；语义化版本比较；匹配单文件 exe / 便携 zip asset；支持“跳过此版本”“禁用检查”；API 被限流时退化为 302 跳转方案 | `src/doubao2api/update_checker.py` | ✅ 已完成 |
+| **Task 1：版本检查模块** | 封装 GitHub Releases API；解析 `tag_name`；语义化版本比较；匹配单文件 exe / 便携 zip asset；支持“跳过此版本”“禁用检查”；API 被限流时先退化为 302 跳转方案，再进一步解析 Release 页面 HTML 获取 release notes、asset 链接与发布时间 | `src/doubao2api/update_checker.py` | ✅ 已完成 |
 | **Task 2：设置持久化** | `Settings` 新增 `auto_check_updates`（默认 True）、`last_ignored_version`、`update_channel` | `src/doubao2api/config.py` | ✅ 已完成 |
 | **Task 3：检查更新页签** | 在 Native Dashboard 新增“检查更新”页签；支持开关、手动检查、展示 Release notes、打开下载页面 | `src/doubao2api/native_dashboard.py` | ✅ 已完成 |
 | **Task 4：下载与校验** | 后台下载 asset；分别提供单文件版 / 便携版下载按钮；带进度条；若 release 提供 `.sha256` 则校验，否则做完整性兜底（大小非零、exe MZ 头、zip 格式）；下载完成后显示本地文件路径；更新信息本地缓存 | `src/doubao2api/update_checker.py`, `src/doubao2api/native_dashboard.py` | ✅ 已完成 |
@@ -69,7 +69,7 @@
 
 ### 关键流程
 
-1. **启动时检查**：程序启动 3 秒后异步请求 GitHub Releases API，5 秒超时；若触发未认证速率限制，退化为读取 `/releases/latest` 的 302 跳转地址，仍可拿到版本号与 Release 页面链接。
+1. **启动时检查**：程序启动 3 秒后异步请求 GitHub Releases API，5 秒超时；若触发未认证速率限制，退化为读取 `/releases/latest` 的 302 跳转地址，并进一步解析 Release 页面 HTML 获取版本号、release notes、asset 链接与发布时间。
 2. **发现新版本**：比较本地版本与远端 `tag_name`；若用户已选择“跳过此版本”则不再提示。
 3. **展示 Release notes**：把 release body 以纯文本/Markdown 形式显示在“检查更新”页签。
 4. **用户点击下载**：根据当前进程形态判断自己是单文件版还是便携版，下载对应 asset 到 `%TEMP%`。
