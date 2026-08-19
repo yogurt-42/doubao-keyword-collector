@@ -24,10 +24,14 @@ SELECTORS = {
         "text": "新对话",
         "roles": ["span", "button", '[role="button"]', "div"],
     },
-    # Chat input textarea.  Tried in order.
+    # Chat input textarea. Tried in order.
+    # Doubao new layout uses a contenteditable div instead of a textarea.
     "composer": [
         "textarea.semi-input-textarea",
-        "textarea",
+        'div[contenteditable="true"]',
+        '[contenteditable]',
+        '[role="textbox"]',
+        'textarea',
     ],
     # Send button.  Tried in order until one is found and enabled.
     "send_button": [
@@ -45,10 +49,15 @@ SELECTORS = {
     # Source/platform node inside a reference row.
     "reference_source": '[class*="platform"],[class*="source"],[class*="site"]',
     # Buttons/areas that expand the thinking box / reference summary.
+    # New Doubao Tailwind layout uses a cursor-pointer summary row;
+    # old layout used explicit collapse buttons.
     "reference_expand": [
         f"xpath={THINKING_EXPAND_XPATH}",
         '[data-testid="collapse_button"]',
         '[class*="collapse-collapse-button"]',
+        '[data-copy-ignore][class*="cursor-pointer"]',  # precise new-layout summary row
+        '[class*="cursor-pointer"]',                       # new-layout fallback
+        '[aria-label*="参考"]',                             # accessible label fallback
     ],
     # Text of the "load more references" button.
     "reference_more_text": MORE_REFERENCES_TEXT,

@@ -2404,6 +2404,8 @@ class NativeDashboard(QWidget):
             badge.setToolTip(row["snapshot_error"])
         elif is_paused and pause_reason:
             badge.setToolTip(pause_reason)
+        elif not row["chat_ready"] and row.get("chat_ready_reason"):
+            badge.setToolTip(row["chat_ready_reason"])
         layout.addWidget(badge)
         captcha_like = (
             is_paused

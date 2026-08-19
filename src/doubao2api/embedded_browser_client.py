@@ -659,7 +659,7 @@ class EmbeddedBrowserClient:
         raise RuntimeError("未能成功切换到新的空白对话")
 
     async def _type_prompt(self, prompt: str) -> None:
-        """Fill the composer textarea and trigger React input events."""
+        """Fill the composer textarea/contenteditable and trigger React input events."""
 
         type_script = r"""
             (() => {
@@ -672,13 +672,19 @@ class EmbeddedBrowserClient:
                 [...document.querySelectorAll(selector)]
               ).find(node => visible(node));
               if (!textarea) throw new Error('No chat textarea found');
-              const setter = Object.getOwnPropertyDescriptor(
-                window.HTMLTextAreaElement.prototype, 'value'
-              ).set;
               const text = __PROMPT__;
-              setter.call(textarea, text);
+              const isEditableDiv = textarea.isContentEditable
+                || textarea.contentEditable === 'true';
+              if (isEditableDiv) {
+                textarea.innerText = text;
+              } else {
+                const setter = Object.getOwnPropertyDescriptor(
+                  window.HTMLTextAreaElement.prototype, 'value'
+                ).set;
+                setter.call(textarea, text);
+                textarea.selectionStart = textarea.selectionEnd = text.length;
+              }
               textarea.focus();
-              textarea.selectionStart = textarea.selectionEnd = text.length;
               [
                 new FocusEvent('focus', { bubbles: true }),
                 new KeyboardEvent('keydown', { key: text, bubbles: true, cancelable: true }),
@@ -729,7 +735,11 @@ class EmbeddedBrowserClient:
               const textarea = selectors.flatMap(selector =>
                 [...document.querySelectorAll(selector)]
               ).find(node => visible(node));
-              return textarea ? textarea.value === '' : false;
+              if (!textarea) return false;
+              if (textarea.isContentEditable || textarea.contentEditable === 'true') {
+                return (textarea.innerText || '').trim() === '';
+              }
+              return textarea.value === '';
             })()
             """.replace("__COMPOSER_SELECTORS__", composer_selectors)
 
@@ -969,15 +979,38 @@ class EmbeddedBrowserClient:
                 else False
             )
             logged_in = bool(cookie_names & SESSION_COOKIE_NAMES) or dom_logged_in
+            chat_ready = self._started and logged_in and page_ready and not self._needs_captcha
+
+            # Build a human-readable reason when the account is not chat-ready.
+            chat_ready_reason = ""
+            if not chat_ready:
+                if not self._started:
+                    chat_ready_reason = "账号未启动"
+                elif self._needs_captcha:
+                    chat_ready_reason = "需要处理人机验证"
+                elif not logged_in:
+                    chat_ready_reason = "账号未登录"
+                elif not page_ready:
+                    if isinstance(page_login, dict):
+                        if not page_login.get("ready"):
+                            chat_ready_reason = "页面仍在加载中"
+                        elif not page_login.get("hasComposer"):
+                            chat_ready_reason = "未检测到聊天输入框"
+                        else:
+                            chat_ready_reason = "页面未就绪"
+                    else:
+                        chat_ready_reason = "页面状态读取失败"
+                else:
+                    chat_ready_reason = "未知原因"
+
             return {
                 "account_id": self.account_id,
                 "started": self._started,
                 "logged_in": logged_in,
                 "browser": "ready" if self._started else "not_started",
                 "has_ms_token": "msToken" in cookie_names,
-                "chat_ready": (
-                    self._started and logged_in and page_ready and not self._needs_captcha
-                ),
+                "chat_ready": chat_ready,
+                "chat_ready_reason": chat_ready_reason,
                 "needs_captcha": self._needs_captcha,
                 "last_error_code": self._last_error_code,
                 "consecutive_failures": self._consecutive_failures,
