@@ -2007,7 +2007,7 @@ class NativeDashboard(QWidget):
             self.backend.submit(download()),
             apply,
             error_callback=on_error,
-            timeout_seconds=600,
+            timeout_seconds=None,
             label=f"下载 {variant}",
         )
 
@@ -2852,16 +2852,19 @@ class NativeDashboard(QWidget):
         callback: Callable[[Any], None] | None = None,
         *,
         error_callback: Callable[[BaseException], None] | None = None,
-        timeout_seconds: float = 90,
+        timeout_seconds: float | None = 90,
         silent: bool = False,
         label: str = "操作",
     ) -> None:
+        deadline = (
+            time.monotonic() + timeout_seconds if timeout_seconds is not None else float("inf")
+        )
         self.pending.append(
             PendingOperation(
                 future=future,
                 callback=callback,
                 error_callback=error_callback,
-                deadline=time.monotonic() + timeout_seconds,
+                deadline=deadline,
                 silent=silent,
                 label=label,
             )

@@ -5,7 +5,7 @@ import json
 import os
 import re
 import sys
-import tempfile
+import time
 import zipfile
 from collections.abc import Callable
 from contextlib import suppress
@@ -314,15 +314,20 @@ class UpdateChecker:
         progress_callback: Callable[[int, int], Any] | None = None,
         chunk_size: int = 8192,
         timeout: float | None = None,
+        stuck_timeout_seconds: float = 1800.0,
     ) -> DownloadResult:
         """下载指定 asset 到 output_dir 并校验。
+
+        支持断点续传：下载中断后再次调用会从临时文件已下载位置继续。
+        如果 stuck_timeout_seconds（默认 30 分钟）内没有任何字节写入，
+        则认为下载卡住并抛出 DownloadError。
 
         下载过程中会调用 progress_callback(downloaded, total)。
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         dest_path = output_dir / asset.name
-        temp_path = Path(tempfile.mktemp(prefix=f"{asset.name}.", dir=output_dir))
+        temp_path = output_dir / f".{asset.name}.download"
 
         sha256_asset = None
         expected_sha256: str | None = None
@@ -337,24 +342,55 @@ class UpdateChecker:
             sha256_text = await self._fetch_text(sha256_asset.url, timeout=timeout)
             expected_sha256 = self._parse_sha256_text(sha256_text or "")
 
+        existing = temp_path.stat().st_size if temp_path.exists() else 0
+        headers: dict[str, str] = {"User-Agent": self._user_agent()}
+        if existing:
+            headers["Range"] = f"bytes={existing}-"
+
         try:
             async with (
-                httpx.AsyncClient(timeout=timeout or 300.0, follow_redirects=True) as client,
-                client.stream(
-                    "GET", asset.url, headers={"User-Agent": self._user_agent()}
-                ) as response,
+                httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client,
+                client.stream("GET", asset.url, headers=headers) as response,
             ):
                 response.raise_for_status()
-                total = int(response.headers.get("content-length", asset.size) or 0)
-                downloaded = 0
-                with temp_path.open("wb") as stream:
-                    async for chunk in response.aiter_bytes(chunk_size=chunk_size):
-                        if not chunk:
-                            continue
-                        stream.write(chunk)
-                        downloaded += len(chunk)
-                        if progress_callback:
-                            progress_callback(downloaded, total)
+
+                if response.status_code == 206:
+                    total = existing + int(response.headers.get("content-length", 0) or 0)
+                    downloaded = existing
+                    mode = "ab"
+                elif response.status_code == 416:
+                    # Range 不可满足，通常意味着文件已经完整。
+                    total = existing
+                    downloaded = existing
+                    mode = "ab"
+                else:
+                    total = int(response.headers.get("content-length", asset.size) or 0)
+                    downloaded = 0
+                    existing = 0
+                    mode = "wb"
+
+                last_progress_time = time.monotonic()
+                last_downloaded = downloaded
+                with temp_path.open(mode) as stream:
+                    if response.status_code == 416:
+                        # 无需继续下载
+                        pass
+                    else:
+                        async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+                            if not chunk:
+                                continue
+                            stream.write(chunk)
+                            downloaded += len(chunk)
+                            now = time.monotonic()
+                            if downloaded != last_downloaded:
+                                last_progress_time = now
+                                last_downloaded = downloaded
+                            elif now - last_progress_time > stuck_timeout_seconds:
+                                raise DownloadError(
+                                    f"下载 {asset.name} 卡住超过 {stuck_timeout_seconds} 秒"
+                                )
+                            if progress_callback:
+                                progress_callback(downloaded, total)
             os.replace(temp_path, dest_path)
             return self._verify_download(dest_path, asset, expected_sha256=expected_sha256)
         except DownloadError:

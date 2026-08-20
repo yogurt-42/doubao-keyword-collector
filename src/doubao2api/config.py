@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from contextlib import suppress
 from dataclasses import asdict, dataclass, fields
@@ -22,6 +23,12 @@ def default_data_root() -> Path:
     configured = os.getenv("DOUBAO_DATA_ROOT")
     if configured:
         return Path(configured).expanduser().resolve()
+    # 打包测试模式：如果 exe 同级存在 data 目录，优先使用它（便于本地测试自动更新）
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        test_data = exe_dir / "data"
+        if test_data.is_dir():
+            return test_data.resolve()
     if os.name == "nt":
         base = Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         return (base / "DoubaoAccountManager").resolve()
