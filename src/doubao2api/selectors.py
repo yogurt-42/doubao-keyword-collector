@@ -29,9 +29,9 @@ SELECTORS = {
     "composer": [
         "textarea.semi-input-textarea",
         'div[contenteditable="true"]',
-        '[contenteditable]',
+        "[contenteditable]",
         '[role="textbox"]',
-        'textarea',
+        "textarea",
     ],
     # Send button.  Tried in order until one is found and enabled.
     "send_button": [
@@ -56,8 +56,8 @@ SELECTORS = {
         '[data-testid="collapse_button"]',
         '[class*="collapse-collapse-button"]',
         '[data-copy-ignore][class*="cursor-pointer"]',  # precise new-layout summary row
-        '[class*="cursor-pointer"]',                       # new-layout fallback
-        '[aria-label*="参考"]',                             # accessible label fallback
+        '[class*="cursor-pointer"]',  # new-layout fallback
+        '[aria-label*="参考"]',  # accessible label fallback
     ],
     # Text of the "load more references" button.
     "reference_more_text": MORE_REFERENCES_TEXT,

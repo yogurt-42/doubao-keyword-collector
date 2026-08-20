@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import math
+import sys
 import threading
 import time
 from collections.abc import Callable, Coroutine
@@ -82,6 +83,7 @@ from .update_checker import (  # noqa: E402
     load_cached_update_info,
     save_cached_update_info,
 )
+from .update_installer import UpdateInstaller  # noqa: E402
 
 DEFAULT_PROMPT = "{keyword}"
 STATUS_TEXT = {
@@ -2040,18 +2042,75 @@ class NativeDashboard(QWidget):
         self._refresh_downloaded_buttons(self._current_update_info)
 
     def _install_update(self) -> None:
-        """Task 5 占位：目前仅打开下载目录并提示用户。"""
-        paths = list(self._downloaded_paths.values())
-        if not paths:
+        """Install the downloaded update that matches the current runtime variant."""
+        if not self._downloaded_paths or self._current_update_info is None:
             return
-        directory = paths[0].parent
-        if directory.exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+
+        variant = _detect_variant()
+        path = self._downloaded_paths.get(variant)
+        if path is None:
+            variant_names = {"single": "单文件版", "portable": "便携版", "unknown": "当前形态"}
+            QMessageBox.information(
+                self,
+                "安装更新",
+                f"未找到与当前 {variant_names.get(variant, variant)} 对应的本地下载文件，"
+                f"请先下载 {variant_names.get(variant, variant)} 后再安装。",
+            )
+            return
+
+        asset = UpdateChecker(current_version=__version__).asset_for_variant(
+            self._current_update_info, variant
+        )
+        if asset is None:
+            QMessageBox.information(
+                self, "安装更新", "无法获取当前版本的 asset 信息，请重新检查更新。"
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "安装更新",
+            "即将关闭当前程序并替换为新版本。\n"
+            "旧版本将备份为 .bak，若安装失败可手动恢复。\n\n"
+            "是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        result = DownloadResult(
+            asset=asset,
+            path=path,
+            size=path.stat().st_size,
+            sha256_expected=None,
+            sha256_actual=None,
+            verified=True,
+            verification_method="fallback",
+        )
+
+        try:
+            installer = UpdateInstaller(result)
+            if not installer.can_install:
+                QMessageBox.information(
+                    self,
+                    "安装更新",
+                    "当前环境不支持自动安装（可能不是打包版本或下载文件未通过校验），"
+                    "请手动覆盖安装。",
+                )
+                return
+            installer.install()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "安装更新失败", f"无法启动更新助手：{exc}")
+            return
+
         QMessageBox.information(
             self,
             "安装更新",
-            "自动替换安装功能将在后续版本实现。\n已为你打开下载目录，可手动覆盖安装。",
+            "更新助手已启动，本程序即将关闭并自动运行新版本。",
         )
+        QApplication.quit()
+        sys.exit(0)
 
     def _build_schedules_page(self) -> QWidget:
         page = QWidget()

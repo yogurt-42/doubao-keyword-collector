@@ -1,7 +1,7 @@
 # 开发路线图
 
 > 记录已完成大事记与下一阶段计划。
-> 最近一次更新：2026-08-17
+> 最近一次更新：2026-08-20
 
 ---
 
@@ -27,6 +27,9 @@
 | 16 | 桌面端账号标签显示/隐藏切换 | `config.py`, `account_manager.py`, `desktop.py`, `native_dashboard.py`, `models.py`, `server.py` |
 | 17 | Phase 3 性能优化专项（快照并发、调度休眠、连接复用、索引、UI 刷新、浏览器轮询） | `account_manager.py`, `research_scheduler.py`, `research_store.py`, `native_dashboard.py`, `embedded_browser_client.py`, `browser_client.py` |
 | 18 | 应用内检查更新：版本检查模块、设置持久化、检查更新页签、GitHub API 速率限制退化方案 | `update_checker.py`, `config.py`, `native_dashboard.py` |
+| 19 | 应用内下载更新：单文件/便携版 asset 下载、进度条、SHA256/完整性兜底校验、本地缓存 | `update_checker.py`, `native_dashboard.py` |
+| 20 | 豆包新布局兼容：适配 `contenteditable` 输入框与新版参考资料展开按钮 | `selectors.py`, `embedded_browser_client.py` |
+| 21 | Windows 自替换 updater：便携版目录替换、单文件 exe 替换、独立 helper、备份回滚 | `update_installer.py`, `update_installer_helper.py`, `native_dashboard.py`, 打包脚本 |
 
 > 各阶段技术细节参见 `CLAUDE.md` 与 `AI_REFERENCE.md`。
 
@@ -64,8 +67,8 @@
 | **Task 2：设置持久化** | `Settings` 新增 `auto_check_updates`（默认 True）、`last_ignored_version`、`update_channel` | `src/doubao2api/config.py` | ✅ 已完成 |
 | **Task 3：检查更新页签** | 在 Native Dashboard 新增“检查更新”页签；支持开关、手动检查、展示 Release notes、打开下载页面 | `src/doubao2api/native_dashboard.py` | ✅ 已完成 |
 | **Task 4：下载与校验** | 后台下载 asset；分别提供单文件版 / 便携版下载按钮；带进度条；若 release 提供 `.sha256` 则校验，否则做完整性兜底（大小非零、exe MZ 头、zip 格式）；下载完成后显示本地文件路径；更新信息本地缓存 | `src/doubao2api/update_checker.py`, `src/doubao2api/native_dashboard.py` | ✅ 已完成 |
-| **Task 5：Windows 自替换 updater** | 便携版：解压 side 目录后整体替换；单文件 exe：生成临时批处理/vbs，等待原进程退出后替换 exe 并重启 | `src/doubao2api/update_installer.py`，打包脚本 | 🚧 待实现 |
-| **Task 6：测试与文档** | 版本比较、asset 匹配、下载/校验、本地缓存单元测试；同步 `ROADMAP.md` / `CLAUDE.md` / `AI_REFERENCE.md` | `tests/test_update_checker.py` + docs | ✅ 已完成 |
+| **Task 5：Windows 自替换 updater** | 便携版：解压 side 目录后整体替换；单文件 exe：启动独立 helper 等待原进程退出后替换 exe 并重启；旧版本保留为 `.bak` | `src/doubao2api/update_installer.py`, `src/doubao2api/update_installer_helper.py`, `packaging/update_installer_helper.spec`, 主 spec | ✅ 已完成 |
+| **Task 6：测试与文档** | 版本比较、asset 匹配、下载/校验、本地缓存、updater 准备/解压/备份单元测试；同步 `ROADMAP.md` / `CLAUDE.md` / `AI_REFERENCE.md` | `tests/test_update_checker.py`, `tests/test_update_installer.py` + docs | ✅ 已完成 |
 
 ### 关键流程
 
@@ -75,8 +78,9 @@
 4. **用户点击下载**：根据当前进程形态判断自己是单文件版还是便携版，下载对应 asset 到 `%TEMP%`。
 5. **下载完成**：显示“立即安装”；用户确认后主程序退出，启动 updater。
 6. **替换与重启**：
-   - 便携版：解压新 zip 到临时目录 → 等待原进程退出 → 删除/重命名旧文件夹 → 移入新文件夹 → 启动新 exe。
-   - 单文件版：把新 exe 下载到 `%TEMP%` → 生成 `update.bat` 等待原进程退出 → 覆盖原 exe → 启动新 exe。
+   - 通用：先清理已存在的 `.bak` 备份，只保留即将生成的最新一份。
+   - 便携版：解压新 zip 到临时目录 → 启动独立 helper → 原进程退出 → 将旧文件夹重命名为 `.bak` → 移入新文件夹 → 启动新 exe。
+   - 单文件版：确认新 exe 已下载到 `%TEMP%` → 启动独立 helper → 原进程退出 → 将旧 exe 重命名为 `.bak` → 移入新 exe → 启动新 exe。
 
 ### 风险与缓解
 
@@ -90,7 +94,7 @@
 
 ### 验收标准
 
-1. `pytest tests/test_update_checker.py -q` 通过。
+1. `pytest tests/test_update_checker.py tests/test_update_installer.py -q` 通过。
 2. 手动测试：
    - 启动后状态栏/页签提示新版本（或手动检查成功）。
    - 能正确显示 Release notes。

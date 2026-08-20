@@ -8,6 +8,13 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(SPECPATH))
 SRC_DIR = os.path.join(PROJECT_ROOT, "src")
 PACKAGING_DIR = os.path.join(PROJECT_ROOT, "packaging")
 
+# The update helper must be built first (packaging/update_installer_helper.spec).
+# If it is missing, the main package will still build but auto-install will not work.
+HELPER_EXE = os.path.join(PROJECT_ROOT, "dist", "update_installer_helper.exe")
+helper_datas = [(HELPER_EXE, ".")] if os.path.exists(HELPER_EXE) else []
+if not helper_datas:
+    print("WARNING: update_installer_helper.exe not found; run helper spec first")
+
 a = Analysis(
     [os.path.join(SRC_DIR, "doubao2api", "windows_entry.py")],
     pathex=[SRC_DIR],
@@ -15,6 +22,7 @@ a = Analysis(
     datas=[
         (os.path.join(SRC_DIR, "doubao2api", "assets"), "doubao2api\\assets"),
         (os.path.join(SRC_DIR, "doubao2api", "static"), "doubao2api\\static"),
+        *helper_datas,
     ],
     hiddenimports=[],
     hookspath=[],

@@ -38,6 +38,8 @@
 D:\ai-source-capturer\doubao-keyword-collector
 ├── packaging/                 # PyInstaller 打包相关
 │   ├── AI信源采集工具.spec
+│   ├── AI信源采集工具-onedir.spec
+│   ├── update_installer_helper.spec
 │   └── app-icon.ico
 ├── src/doubao2api/            # 主要源码
 │   ├── __main__.py            # 服务端入口：doubao-account-manager
@@ -60,6 +62,9 @@ D:\ai-source-capturer\doubao-keyword-collector
 │   ├── server.py              # FastAPI 接口
 │   ├── static/index.html      # Web 管理界面（单页应用）
 │   ├── text_utils.py          # 文本片段合并工具
+│   ├── update_checker.py      # GitHub Releases 版本检查、asset 下载与校验
+│   ├── update_installer.py    # Windows 自替换 updater 启动器
+│   ├── update_installer_helper.py  # 独立 helper：等待原进程退出并替换文件
 │   └── config.py              # Settings / RuntimeConfig
 ├── tests/                     # pytest 测试
 ├── CLAUDE.md        # AI 启动时快速上下文
@@ -303,6 +308,24 @@ D:\ai-source-capturer\doubao-keyword-collector
   - `POST /admin/api/accounts/{id}/stop|rename|category|...`。
   - 任务模板 / 触发计划 CRUD 与立即执行接口。
 
+### 5.16 更新模块：`update_checker.py` / `update_installer.py` / `update_installer_helper.py`
+
+- `update_checker.py`
+  - 封装 GitHub Releases API：获取 latest release、语义化版本比较、单文件 exe / 便携 zip asset 匹配。
+  - 下载 asset 到 `%TEMP%`；优先使用 release 附带的 `.sha256` 文件校验，否则做完整性兜底校验（大小非零、exe MZ 头、zip 格式）。
+  - API 被限流时退化：先读取 `/releases/latest` 的 302 跳转地址，再解析 Release 页面 HTML 获取版本号、release notes、asset 真实链接与发布时间。
+  - `DownloadResult` 记录 asset 元数据、本地路径、校验结果。
+- `update_installer.py`
+  - `UpdateInstaller`：根据当前运行形态（`single` / `portable` / `unknown`）决定如何自替换。
+  - `can_install`：仅在 frozen Windows 构建且下载已校验通过时返回 True。
+  - `install()`：便携版解压新 zip 到临时目录；单文件版直接使用已下载的新 exe；清理旧 `.bak` 后启动独立 helper 并返回。
+  - `_find_helper()`：优先查找与当前 exe 同目录的 `update_installer_helper.exe`；开发环境回退到直接运行 helper 模块。
+- `update_installer_helper.py`
+  - 独立 CLI 程序，被打包为 `update_installer_helper.exe`。
+  - 参数：`--mode single|portable`、`--pid`、新旧 exe/目录路径。
+  - 等待原进程 PID 退出后执行文件替换，将旧版本保留为 `.bak`，最后启动新版本 exe。
+  - 日志写入 `%TEMP%\doubao_update_helper.log`。
+
 ---
 
 ## 6. 数据模型
@@ -440,6 +463,8 @@ research_schedules (
 - 框架：pytest + pytest-asyncio。
 - 测试位置：`tests/`。
 - 当前覆盖：
+  - `test_update_checker.py`：版本比较、asset 匹配、下载/校验、本地缓存。
+  - `test_update_installer.py`：updater 形态识别、备份清理、便携版解压、helper 定位。
   - `test_research_api.py`：Web 端新增 API（历史任务操作、结果筛选/导出、长尾分析、信源对比、平台信息导入、定时任务立即执行）。
   - `test_long_tail_analysis.py`：长尾信源聚合、分类、代表性链接提取。
   - `test_research_links.py`：平台映射、链接归一化。
@@ -462,10 +487,19 @@ research_schedules (
 ## 11. 打包
 
 - 使用 PyInstaller。
-- Spec 文件：`packaging/AI信源采集工具.spec`。
-- 打包命令示例：
+- Spec 文件：
+  - `packaging/AI信源采集工具.spec`：单文件版（one-file）。
+  - `packaging/AI信源采集工具-onedir.spec`：便携版（one-dir）。
+  - `packaging/update_installer_helper.spec`：独立的更新替换 helper，需要先构建，生成的 `update_installer_helper.exe` 会被主 spec 自动打包进输出目录。
+- 打包顺序：
   ```cmd
-  pyinstaller packaging\AI信源采集工具.spec --distpath dist-dir --workpath build-dir --noconfirm --onedir
+  pyinstaller packaging\update_installer_helper.spec --distpath dist --workpath build --noconfirm
+  pyinstaller packaging\AI信源采集工具.spec --distpath dist --workpath build --noconfirm --onedir
+  ```
+  或便携版：
+  ```cmd
+  pyinstaller packaging\update_installer_helper.spec --distpath dist --workpath build --noconfirm
+  pyinstaller packaging\AI信源采集工具-onedir.spec --distpath dist --workpath build --noconfirm
   ```
 - 入口脚本：`doubao-keyword-collector`（桌面版）。
 
@@ -495,4 +529,4 @@ research_schedules (
 - 所有账号数据、Cookie、数据库均保存在本地。
 - 桌面模式依赖 PySide6 可选依赖；服务端模式不需要 GUI。
 - 页面结构变化后需要更新 `selectors.py` 中的选择器。
-- P0/P1 阶段修复、平台类型改造、长尾信源分析、定时任务、Web UI 与 Native 对齐、URL 匹配性能优化、账号标签显示/隐藏切换、验证码人机验证处理、Phase 3 性能优化专项、应用内检查更新、应用内下载更新（双版本下载 + SHA256/兜底校验 + 本地缓存）、GitHub API 限流时的 Release 页面 HTML 兜底解析、豆包新布局兼容均已完成。当前下一阶段为“应用内自动更新”的剩余部分：Windows 自替换 installer，详见 `ROADMAP.md`。
+- P0/P1 阶段修复、平台类型改造、长尾信源分析、定时任务、Web UI 与 Native 对齐、URL 匹配性能优化、账号标签显示/隐藏切换、验证码人机验证处理、Phase 3 性能优化专项、应用内检查更新、应用内下载更新（双版本下载 + SHA256/兜底校验 + 本地缓存）、GitHub API 限流时的 Release 页面 HTML 兜底解析、豆包新布局兼容、Windows 自替换 updater 均已完成。当前暂无重大待实现功能，后续计划见 `ROADMAP.md`。
