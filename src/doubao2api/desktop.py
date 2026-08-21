@@ -76,7 +76,7 @@ class AccountPage(QWebEnginePage):
 
 
 class QtBrowserBridge(QObject):
-    open_requested = Signal(str, str, str, object)
+    open_requested = Signal(str, str, str, str, object)
     close_requested = Signal(str, object)
     focus_requested = Signal(str, object)
     activate_requested = Signal(str, object)
@@ -129,12 +129,19 @@ class QtBrowserBridge(QObject):
             future.cancel()
             raise RuntimeError(f"{operation}超过 {int(timeout)} 秒未响应") from exc
 
-    async def open_account(self, account_id: str, data_dir: Path, url: str) -> None:
+    async def open_account(
+        self,
+        account_id: str,
+        data_dir: Path,
+        url: str,
+        platform: str = "doubao",
+    ) -> None:
         await self._request(
             self.open_requested,
             account_id,
             str(data_dir),
             url,
+            platform,
             timeout=70,
             operation="打开账号页面",
         )
@@ -230,12 +237,13 @@ class QtBrowserBridge(QObject):
         page.setVisible(True)
         page.setLifecycleState(QWebEnginePage.LifecycleState.Active)
 
-    @Slot(str, str, str, object)
+    @Slot(str, str, str, str, object)
     def _open_account(
         self,
         account_id: str,
         data_dir: str,
         url: str,
+        platform: str,
         future: concurrent.futures.Future[Any],
     ) -> None:
         open_in_background = account_id in self.background_open_accounts
@@ -251,7 +259,7 @@ class QtBrowserBridge(QObject):
             return
         try:
             digest = hashlib.sha1(account_id.encode("utf-8")).hexdigest()[:12]
-            profile = QWebEngineProfile(f"doubao-{digest}", self)
+            profile = QWebEngineProfile(f"{platform}-{digest}", self)
             root = Path(data_dir)
             storage = root / "embedded-storage"
             cache = root / "embedded-cache"

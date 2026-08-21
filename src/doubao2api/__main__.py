@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import logging
 
-from .config import RuntimeConfig
+from .config import RuntimeConfig, configure_logging
 from .server import run_server
 
 
@@ -44,6 +45,8 @@ def main(argv: list[str] | None = None) -> None:
         runtime.browser_executable_path = args.browser_executable_path
     if args.open_admin_browser is not None:
         runtime.open_admin_browser = args.open_admin_browser
+    log_path = configure_logging(data_root=runtime.data_root)
+    logging.info("Server log file: %s", log_path)
     run_server(runtime)
 
 

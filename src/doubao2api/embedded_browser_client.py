@@ -16,21 +16,16 @@ from .browser_client import (
     ReferenceExpansionError,
 )
 from .cookie_utils import parse_cookie_records
+from .platforms import get_platform
+from .platforms.base import AIPlatform
 from .research_platforms import category_for_url, platform_for_url, to_js_platform_data
 from .selectors import (
-    CAPTCHA_DOM_SELECTORS,
-    CAPTCHA_IFRAME_PATTERNS,
-    REFERENCE_SUMMARY_PATTERN,
-    SELECTORS,
     js_regex_alternation,
     js_regex_pattern,
     js_selector_list,
     js_string,
 )
 from .text_utils import _collect_text, _merge_text_fragments, _text_from_content
-
-CHAT_URL = "https://www.doubao.com/chat/"
-SESSION_COOKIE_NAMES = {"sessionid", "sessionid_ss"}
 
 RESPONSE_POLL_INTERVAL_SECONDS = 0.5
 REFERENCE_POLL_INTERVAL_SECONDS = 0.3
@@ -43,55 +38,65 @@ CAPTCHA_STALL_SECONDS = 30.0
 CAPTCHA_MAX_WAIT_SECONDS = 600.0
 
 
-CAPTURE_SCRIPT = r"""
-(() => {
-  window.__doubaoEmbeddedCapture = {
+# _default_platform is kept for backward compatibility but is no longer used.
+def _default_platform() -> AIPlatform:
+    return get_platform("doubao")
+
+
+def _build_capture_script(url_patterns: list[str]) -> str:
+    """Build the fetch-interception script for the given platform endpoint patterns."""
+    patterns_json = js_selector_list(url_patterns)
+    return rf"""
+(() => {{
+  window.__doubaoEmbeddedCapture = {{
     events: [],
     done: false,
     error: null
-  };
+  }};
   if (window.__doubaoEmbeddedCaptureInstalled) return true;
+  const urlPatterns = {patterns_json};
   const originalFetch = window.fetch.bind(window);
-  window.fetch = async (...args) => {
+  window.fetch = async (...args) => {{
     const request = args[0];
     const url = typeof request === 'string' ? request : (request && request.url) || '';
     const response = await originalFetch(...args);
     const capture = window.__doubaoEmbeddedCapture;
-    if (capture && url.includes('/chat/completion') && response.body) {
+    if (capture && urlPatterns.some(pattern => url.includes(pattern)) && response.body) {{
       const cloned = response.clone();
-      (async () => {
-        try {
+      (async () => {{
+        try {{
           const reader = cloned.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
-          while (true) {
-            const { value, done } = await reader.read();
+          while (true) {{
+            const {{ value, done }} = await reader.read();
             if (done) break;
-            buffer += decoder.decode(value, { stream: true });
+            buffer += decoder.decode(value, {{ stream: true }});
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
-            for (const line of lines) {
+            for (const line of lines) {{
               const trimmed = line.trim();
               if (!trimmed.startsWith('data:')) continue;
               const raw = trimmed.slice(5).trim();
               if (!raw || raw === '[DONE]') continue;
-              try { capture.events.push(JSON.parse(raw)); }
-              catch (_) { capture.events.push({ text: raw }); }
-            }
-          }
+              try {{ capture.events.push(JSON.parse(raw)); }}
+              catch (_) {{ capture.events.push({{ text: raw }}); }}
+            }}
+          }}
           capture.done = true;
-        } catch (error) {
+        }} catch (error) {{
           capture.error = String(error);
           capture.done = true;
-        }
-      })();
-    }
+        }}
+      }})();
+    }}
     return response;
-  };
+  }};
   window.__doubaoEmbeddedCaptureInstalled = true;
   return true;
-})()
+}})()
 """
+
 
 REFERENCE_ROWS_SCRIPT_TEMPLATE = r"""
 (() => {
@@ -145,13 +150,14 @@ REFERENCE_ROWS_SCRIPT_TEMPLATE = r"""
 """
 
 
-def build_reference_rows_script() -> str:
+def build_reference_rows_script(platform: AIPlatform) -> str:
+    selectors = platform.selectors
     return (
         REFERENCE_ROWS_SCRIPT_TEMPLATE.replace(
-            "__REFERENCE_ROWS__", js_string(", ".join(SELECTORS["reference_rows"]))
+            "__REFERENCE_ROWS__", js_string(", ".join(selectors["reference_rows"]))
         )
-        .replace("__REFERENCE_TITLE__", js_string(SELECTORS["reference_title"]))
-        .replace("__REFERENCE_SOURCE__", js_string(SELECTORS["reference_source"]))
+        .replace("__REFERENCE_TITLE__", js_string(selectors["reference_title"]))
+        .replace("__REFERENCE_SOURCE__", js_string(selectors["reference_source"]))
         .replace("__PLATFORM_DATA__", to_js_platform_data())
     )
 
@@ -218,13 +224,13 @@ CAPTCHA_DETECT_SCRIPT_TEMPLATE = r"""
 """
 
 
-def build_captcha_detect_script() -> str:
+def build_captcha_detect_script(platform: AIPlatform) -> str:
     return (
         CAPTCHA_DETECT_SCRIPT_TEMPLATE.replace(
-            "__CAPTCHA_TEXT_PATTERN__", js_regex_alternation(SELECTORS["captcha_patterns"])
+            "__CAPTCHA_TEXT_PATTERN__", js_regex_alternation(platform.captcha_patterns)
         )
-        .replace("__CAPTCHA_IFRAME_PATTERNS__", js_selector_list(CAPTCHA_IFRAME_PATTERNS))
-        .replace("__CAPTCHA_DOM_SELECTORS__", js_selector_list(CAPTCHA_DOM_SELECTORS))
+        .replace("__CAPTCHA_IFRAME_PATTERNS__", js_selector_list(platform.captcha_iframe_patterns))
+        .replace("__CAPTCHA_DOM_SELECTORS__", js_selector_list(platform.captcha_dom_selectors))
     )
 
 
@@ -235,10 +241,8 @@ REFERENCE_GENERIC_SCRIPT_TEMPLATE = r"""
     try { return new URL(value, location.href).href; }
     catch (_) { return ''; }
   };
-  const ignoredHosts = new Set([
-    'www.doubao.com', 'doubao.com', 'lf-flow-web-cdn.doubao.com'
-  ]);
-  const summaryPattern = new RegExp(__REFERENCE_SUMMARY_PATTERN__);
+  const ignoredHosts = new Set(__IGNORED_HOSTS__);
+  const summaryPattern = new RegExp(__self.platform.reference_summary_pattern__);
   const bodyText = document.body ? (document.body.innerText || '') : '';
   if (!summaryPattern.test(bodyText)) return [];
   const candidates = [...document.querySelectorAll('*')].filter(node => {
@@ -279,9 +283,14 @@ REFERENCE_GENERIC_SCRIPT_TEMPLATE = r"""
 })()
 """
 
-REFERENCE_GENERIC_SCRIPT = REFERENCE_GENERIC_SCRIPT_TEMPLATE.replace(
-    "__REFERENCE_SUMMARY_PATTERN__", js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
-)
+
+def build_reference_generic_script(platform: AIPlatform) -> str:
+    ignored = json.dumps(list(platform.ignored_hosts), ensure_ascii=False)
+    summary_pattern = js_regex_pattern(platform.reference_summary_pattern)
+    return REFERENCE_GENERIC_SCRIPT_TEMPLATE.replace(
+        "__self.platform.reference_summary_pattern__", summary_pattern
+    ).replace("__IGNORED_HOSTS__", ignored)
+
 
 ROBUST_LOGIN_STATE_SCRIPT_TEMPLATE = r"""
 (() => {
@@ -408,39 +417,50 @@ ROBUST_LOGIN_STATE_SCRIPT_TEMPLATE = r"""
 })()
 """
 
-LOGIN_STATE_SCRIPT = (
-    ROBUST_LOGIN_STATE_SCRIPT_TEMPLATE.replace(
-        "__USER_MENU_SELECTORS__", js_selector_list(SELECTORS["user_menu_trigger"])
+
+def _build_login_state_script(platform: AIPlatform) -> str:
+    """Build the login-state detection script for a specific platform."""
+    selectors = platform.selectors
+    return (
+        ROBUST_LOGIN_STATE_SCRIPT_TEMPLATE.replace(
+            "__USER_MENU_SELECTORS__", js_selector_list(selectors["user_menu_trigger"])
+        )
+        .replace("__LOGOUT_TEXT__", js_string(selectors.get("logout_text", "")))
+        .replace("__LOGIN_SELECTORS__", js_selector_list(selectors["login_controls"]["selectors"]))
+        .replace(
+            "__LOGIN_TEXT_PATTERNS__",
+            js_selector_list(selectors["login_controls"]["text_patterns"]),
+        )
+        .replace(
+            "__LOGIN_ARIA_PATTERNS__",
+            js_selector_list(selectors["login_controls"]["aria_patterns"]),
+        )
+        .replace("__NEW_CHAT_TEXT__", js_string(selectors["new_chat"]["text"]))
+        .replace("__CAPTCHA_PATTERN__", js_regex_alternation(platform.captcha_patterns))
+        .replace("__HISTORY_TEXT__", js_string(selectors["history_indicator"]["text"]))
+        .replace(
+            "__HISTORY_LINK_SELECTOR__",
+            js_string(selectors["history_indicator"]["link_selector"]),
+        )
+        .replace("__HISTORY_MIN_LINKS__", str(selectors["history_indicator"]["min_links"]))
+        .replace("__COMPOSER_SELECTORS__", js_selector_list(selectors["composer"]))
     )
-    .replace("__LOGOUT_TEXT__", js_string(SELECTORS.get("logout_text", "")))
-    .replace("__LOGIN_SELECTORS__", js_selector_list(SELECTORS["login_controls"]["selectors"]))
-    .replace(
-        "__LOGIN_TEXT_PATTERNS__",
-        js_selector_list(SELECTORS["login_controls"]["text_patterns"]),
-    )
-    .replace(
-        "__LOGIN_ARIA_PATTERNS__",
-        js_selector_list(SELECTORS["login_controls"]["aria_patterns"]),
-    )
-    .replace("__NEW_CHAT_TEXT__", js_string(SELECTORS["new_chat"]["text"]))
-    .replace("__CAPTCHA_PATTERN__", js_regex_alternation(SELECTORS["captcha_patterns"]))
-    .replace("__HISTORY_TEXT__", js_string(SELECTORS["history_indicator"]["text"]))
-    .replace(
-        "__HISTORY_LINK_SELECTOR__",
-        js_string(SELECTORS["history_indicator"]["link_selector"]),
-    )
-    .replace("__HISTORY_MIN_LINKS__", str(SELECTORS["history_indicator"]["min_links"]))
-    .replace("__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"]))
-)
 
 
 class EmbeddedBrowserClient:
     """Browser client backed by an in-application Qt WebEngine tab."""
 
-    def __init__(self, bridge: Any, user_data_dir: Path, account_id: str) -> None:
+    def __init__(
+        self,
+        bridge: Any,
+        user_data_dir: Path,
+        account_id: str,
+        platform: str | AIPlatform = "doubao",
+    ) -> None:
         self.bridge = bridge
         self.user_data_dir = user_data_dir.resolve()
         self.account_id = account_id
+        self.platform = platform if isinstance(platform, AIPlatform) else get_platform(platform)
         self._started = False
         self._chat_lock = asyncio.Lock()
         self._state_lock = asyncio.Lock()
@@ -468,7 +488,7 @@ class EmbeddedBrowserClient:
         await self.bridge.open_account(
             self.account_id,
             self.user_data_dir,
-            CHAT_URL,
+            self.platform.chat_url,
         )
         self._started = True
         self._started_at = time.monotonic()
@@ -532,7 +552,9 @@ class EmbeddedBrowserClient:
         if not isinstance(decoded, dict) or not decoded.get("__doubaoBridge"):
             return decoded
         if not decoded.get("ok"):
-            raise RuntimeError(f"豆包页面操作失败：{decoded.get('error', '未知错误')}")
+            raise RuntimeError(
+                f"{self.platform.name}页面操作失败：{decoded.get('error', '未知错误')}"
+            )
         return decoded.get("value")
 
     async def _ping_page(self, timeout: float = PAGE_HEALTH_PING_TIMEOUT_SECONDS) -> bool:
@@ -611,7 +633,7 @@ class EmbeddedBrowserClient:
             })()
             """.replace(
             "__NEW_CHAT_TEXT__",
-            js_string(SELECTORS["new_chat"]["text"]),
+            js_string(self.platform.selectors["new_chat"]["text"]),
         )
         textarea_state_script = r"""
             (() => {
@@ -628,14 +650,16 @@ class EmbeddedBrowserClient:
                 value: textarea ? (textarea.value || '') : ''
               };
             })()
-            """.replace("__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"]))
+            """.replace(
+            "__COMPOSER_SELECTORS__", js_selector_list(self.platform.selectors["composer"])
+        )
 
         async def has_fresh_composer() -> bool:
             state = await self._run_script(textarea_state_script)
             return isinstance(state, dict) and state.get("value") == ""
 
         # Primary method: reload the base chat URL. This always gives a clean page.
-        await self.bridge.navigate(self.account_id, CHAT_URL)
+        await self.bridge.navigate(self.account_id, self.platform.chat_url)
         ready = await self._wait_for_condition(
             f"({textarea_state_script}).found",
             timeout=NEW_CONVERSATION_READY_TIMEOUT_SECONDS,
@@ -664,8 +688,12 @@ class EmbeddedBrowserClient:
         type_script = r"""
             (() => {
               const visible = node => {
+                if (!node) return false;
+                const style = getComputedStyle(node);
                 const box = node.getBoundingClientRect();
-                return box.width > 0 && box.height > 0;
+                return style.display !== 'none'
+                  && style.visibility !== 'hidden'
+                  && box.width > 0 && box.height > 0;
               };
               const selectors = __COMPOSER_SELECTORS__;
               const textarea = selectors.flatMap(selector =>
@@ -675,34 +703,74 @@ class EmbeddedBrowserClient:
               const text = __PROMPT__;
               const isEditableDiv = textarea.isContentEditable
                 || textarea.contentEditable === 'true';
+
+              // Focus first so subsequent events are considered user-initiated.
+              textarea.focus();
+              textarea.scrollTop = textarea.scrollHeight;
+
               if (isEditableDiv) {
+                textarea.innerHTML = '';
                 textarea.innerText = text;
+                const range = document.createRange();
+                range.selectNodeContents(textarea);
+                range.collapse(false);
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(range);
               } else {
-                const setter = Object.getOwnPropertyDescriptor(
-                  window.HTMLTextAreaElement.prototype, 'value'
-                ).set;
+                // Clear then set value via native setter to bypass React value caching.
+                const proto = window.HTMLTextAreaElement.prototype;
+                const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+                setter.call(textarea, '');
                 setter.call(textarea, text);
                 textarea.selectionStart = textarea.selectionEnd = text.length;
               }
-              textarea.focus();
-              [
+
+              // Fire a realistic sequence of input events. React listens to
+              // native input/change events, so these must bubble properly.
+              const events = [
                 new FocusEvent('focus', { bubbles: true }),
-                new KeyboardEvent('keydown', { key: text, bubbles: true, cancelable: true }),
-                new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }),
+                new KeyboardEvent('keydown', {
+                  key: 'a', code: 'KeyA', bubbles: true, cancelable: true,
+                }),
+                new InputEvent('beforeinput', {
+                  bubbles: true, cancelable: true,
+                  inputType: 'insertText', data: text,
+                }),
+                new InputEvent('input', {
+                  bubbles: true, inputType: 'insertText', data: text,
+                }),
+                new KeyboardEvent('keyup', {
+                  key: 'a', code: 'KeyA', bubbles: true, cancelable: true,
+                }),
                 new Event('change', { bubbles: true }),
-                new KeyboardEvent('keyup', { key: text, bubbles: true, cancelable: true }),
-              ].forEach(event => textarea.dispatchEvent(event));
-              return true;
+              ];
+              events.forEach(event => textarea.dispatchEvent(event));
+
+              // Some frameworks (e.g. DeepSeek's composer) only re-enable the
+              // send button after a short tick; dispatch an extra input at the
+              // next animation frame boundary to ensure state sync.
+              requestAnimationFrame(() => {
+                textarea.dispatchEvent(new InputEvent('input', {
+                  bubbles: true, inputType: 'insertText', data: text,
+                }));
+              });
+
+              return { value: isEditableDiv ? textarea.innerText : textarea.value };
             })()
-            """.replace("__COMPOSER_SELECTORS__", js_selector_list(SELECTORS["composer"])).replace(
-            "__PROMPT__", json.dumps(prompt, ensure_ascii=False)
-        )
-        await self._run_script(type_script)
+            """.replace(
+            "__COMPOSER_SELECTORS__", js_selector_list(self.platform.selectors["composer"])
+        ).replace("__PROMPT__", json.dumps(prompt, ensure_ascii=False))
+        result = await self._run_script(type_script)
+        if isinstance(result, dict) and result.get("value") != prompt:
+            raise RuntimeError(
+                f"{self.platform.name}输入框未正确填入内容（期望：{prompt!r}，实际：{result.get('value')!r}）"
+            )
 
     async def _submit_prompt(self, prompt: str) -> None:
         """Click the send button if ready; otherwise fall back to pressing Enter."""
 
-        send_button_selectors = js_selector_list(SELECTORS["send_button"])
+        send_button_selectors = js_selector_list(self.platform.selectors["send_button"])
         send_ready_script = r"""
             (() => {
               const selectors = __SEND_BUTTON_SELECTORS__;
@@ -720,16 +788,33 @@ class EmbeddedBrowserClient:
                 .map(selector => document.querySelector(selector))
                 .find(node => node);
               if (!button) return false;
+              button.scrollIntoView({ block: 'center', inline: 'center' });
+              const rect = button.getBoundingClientRect();
+              const x = rect.left + rect.width / 2;
+              const y = rect.top + rect.height / 2;
+              const opts = {
+                bubbles: true, cancelable: true, view: window,
+                clientX: x, clientY: y,
+              };
+              button.dispatchEvent(new PointerEvent('pointerdown', opts));
+              button.dispatchEvent(new MouseEvent('mousedown', opts));
+              button.dispatchEvent(new PointerEvent('pointerup', opts));
+              button.dispatchEvent(new MouseEvent('mouseup', opts));
+              button.dispatchEvent(new MouseEvent('click', opts));
               button.click();
               return true;
             })()
             """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
-        composer_selectors = js_selector_list(SELECTORS["composer"])
+        composer_selectors = js_selector_list(self.platform.selectors["composer"])
         textarea_empty_script = r"""
             (() => {
               const visible = node => {
+                if (!node) return false;
+                const style = getComputedStyle(node);
                 const box = node.getBoundingClientRect();
-                return box.width > 0 && box.height > 0;
+                return style.display !== 'none'
+                  && style.visibility !== 'hidden'
+                  && box.width > 0 && box.height > 0;
               };
               const selectors = __COMPOSER_SELECTORS__;
               const textarea = selectors.flatMap(selector =>
@@ -751,6 +836,8 @@ class EmbeddedBrowserClient:
             )
             if not ready:
                 return False
+            # Allow DeepSeek's React state to settle before clicking.
+            await asyncio.sleep(0.2)
             sent = await self._run_script(click_send_script)
             if not sent:
                 return False
@@ -800,7 +887,7 @@ class EmbeddedBrowserClient:
             return
         if await try_press_enter():
             return
-        raise RuntimeError("豆包发送按钮尚未就绪，关键词没有发送")
+        raise RuntimeError(f"{self.platform.name}发送按钮尚未就绪，关键词没有发送")
 
     def _mark_needs_captcha(self, reason: str = "") -> None:
         """Mark the account as needing manual captcha resolution and reset counters."""
@@ -846,7 +933,7 @@ class EmbeddedBrowserClient:
         """Run visual/structural captcha detection in addition to body-text scan."""
 
         try:
-            result = await self._run_script(build_captcha_detect_script())
+            result = await self._run_script(build_captcha_detect_script(self.platform))
         except Exception:
             return {}
         if isinstance(result, dict):
@@ -863,14 +950,16 @@ class EmbeddedBrowserClient:
     async def _debug_snapshot(self) -> dict[str, Any]:
         """Capture a lightweight snapshot of the current page for debugging."""
 
-        reference_selector = js_string(", ".join(SELECTORS["reference_rows"]))
+        reference_selector = js_string(", ".join(self.platform.selectors["reference_rows"]))
         expand_selector = js_string(
-            ", ".join(s for s in SELECTORS["reference_expand"] if not s.startswith("xpath="))
+            ", ".join(
+                s for s in self.platform.selectors["reference_expand"] if not s.startswith("xpath=")
+            )
         )
-        more_text = js_string(SELECTORS["reference_more_text"])
-        send_selector = js_string(", ".join(SELECTORS["send_button"]))
-        composer_selector = js_string(", ".join(SELECTORS["composer"]))
-        summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
+        more_text = js_string(self.platform.selectors["reference_more_text"])
+        send_selector = js_string(", ".join(self.platform.selectors["send_button"]))
+        composer_selector = js_string(", ".join(self.platform.selectors["composer"]))
+        summary_pattern = js_regex_pattern(self.platform.reference_summary_pattern)
         script = (
             r"""
             (() => {
@@ -967,7 +1056,10 @@ class EmbeddedBrowserClient:
                     "login_source": "",
                     "uptime_seconds": int(self.startup_age_seconds),
                 }
-            page_login = await self._run_script(LOGIN_STATE_SCRIPT) if self._started else {}
+            if self._started:
+                page_login = await self._run_script(_build_login_state_script(self.platform))
+            else:
+                page_login = {}
             dom_logged_in = (
                 bool(page_login.get("loggedIn")) if isinstance(page_login, dict) else False
             )
@@ -978,7 +1070,7 @@ class EmbeddedBrowserClient:
                 if isinstance(page_login, dict)
                 else False
             )
-            logged_in = bool(cookie_names & SESSION_COOKIE_NAMES) or dom_logged_in
+            logged_in = bool(cookie_names & self.platform.session_cookie_names) or dom_logged_in
             chat_ready = self._started and logged_in and page_ready and not self._needs_captcha
 
             # Build a human-readable reason when the account is not chat-ready.
@@ -1017,7 +1109,7 @@ class EmbeddedBrowserClient:
                 "page_url": state.get("page_url", ""),
                 "login_source": (
                     "cookie"
-                    if cookie_names & SESSION_COOKIE_NAMES
+                    if cookie_names & self.platform.session_cookie_names
                     else ("page" if dom_logged_in else "")
                 ),
                 "uptime_seconds": (
@@ -1039,10 +1131,10 @@ class EmbeddedBrowserClient:
     async def import_cookies(self, cookie_text: str) -> int:
         if not self._started:
             await self.start()
-        records = parse_cookie_records(cookie_text)
+        records = parse_cookie_records(cookie_text, self.platform.cookie_match_domains())
         if records:
             await self.bridge.set_cookies(self.account_id, records)
-            await self.bridge.navigate(self.account_id, CHAT_URL)
+            await self.bridge.navigate(self.account_id, self.platform.chat_url)
         return len(records)
 
     async def chat(
@@ -1074,7 +1166,11 @@ class EmbeddedBrowserClient:
                 await self._activate_for_automation()
                 if fresh_conversation:
                     await self._ensure_new_conversation()
-                await self._run_script(CAPTURE_SCRIPT)
+                if self.platform.response_capture_url_patterns:
+                    capture_script = _build_capture_script(
+                        self.platform.response_capture_url_patterns
+                    )
+                    await self._run_script(capture_script)
                 await self._type_prompt(prompt)
                 await self._submit_prompt(prompt)
                 self._script_timeout_streak = 0
@@ -1089,9 +1185,14 @@ class EmbeddedBrowserClient:
                 response_completed = False
                 saw_loading = False
                 answer_finished_at: float | None = None
-                send_button_selectors = js_selector_list(SELECTORS["send_button"])
-                reference_summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
-                captcha_pattern = js_regex_alternation(SELECTORS["captcha_patterns"])
+                send_button_selectors = js_selector_list(self.platform.selectors["send_button"])
+                reference_summary_pattern = js_regex_pattern(
+                    self.platform.reference_summary_pattern
+                )
+                reference_rows_selector = js_string(
+                    ", ".join(self.platform.selectors["reference_rows"])
+                )
+                captcha_pattern = js_regex_alternation(self.platform.selectors["captcha_patterns"])
                 while time.monotonic() < deadline or (
                     self._needs_captcha
                     and captcha_hard_deadline is not None
@@ -1129,16 +1230,24 @@ class EmbeddedBrowserClient:
                                   );
                                   const referencePattern = __REFERENCE_SUMMARY_PATTERN__;
                                   const body = document.body.innerText || '';
+                                  let referenceReady = false;
+                                  if (referencePattern) {
+                                    referenceReady = new RegExp(referencePattern).test(body);
+                                  } else {
+                                    const selector = __REFERENCE_ROWS_SELECTOR__;
+                                    referenceReady = document.querySelectorAll(selector).length > 0;
+                                  }
                                   const captchaPattern = __CAPTCHA_PATTERN__;
                                   const captcha = new RegExp(captchaPattern).test(body);
                                   return {
                                     loading,
                                     captcha,
-                                    referenceReady: new RegExp(referencePattern).test(body)
+                                    referenceReady
                                   };
                                 })()
                                 """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
                                 .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
+                                .replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
                                 .replace("__CAPTCHA_PATTERN__", captcha_pattern)
                             ),
                         )
@@ -1196,20 +1305,26 @@ class EmbeddedBrowserClient:
                 if not response_completed:
                     if self._needs_captcha:
                         raise TimeoutError("等待人工验证超时")
-                    raise TimeoutError("等待豆包回答超时")
+                    raise TimeoutError(f"等待{self.platform.name}回答超时")
                 fragments: list[str] = []
                 for event in capture.get("events", []):
                     _collect_text(event, fragments)
-                text = _merge_text_fragments(fragments) or "豆包回答完成"
+                text = _merge_text_fragments(fragments) or f"{self.platform.name}回答完成"
                 references: list[dict[str, str]] = []
                 expected = 0
                 if collect_thinking_references:
-                    reference_summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
-                    reference_rows_selector = js_string(", ".join(SELECTORS["reference_rows"]))
+                    reference_summary_pattern = js_regex_pattern(
+                        self.platform.reference_summary_pattern
+                    )
+                    reference_rows_selector = js_string(
+                        ", ".join(self.platform.selectors["reference_rows"])
+                    )
                     reference_appear_script = r"""
                         (() => {
                           const pattern = __REFERENCE_SUMMARY_PATTERN__;
-                          if (new RegExp(pattern).test(document.body.innerText || '')) return true;
+                          if (pattern && new RegExp(pattern).test(document.body.innerText || '')) {
+                            return true;
+                          }
                           const selector = __REFERENCE_ROWS_SELECTOR__;
                           return document.querySelectorAll(selector).length > 0;
                         })()
@@ -1236,7 +1351,7 @@ class EmbeddedBrowserClient:
                 raise
 
     async def _reference_rows(self) -> list[dict[str, str]]:
-        rows = await self._run_script(build_reference_rows_script())
+        rows = await self._run_script(build_reference_rows_script(self.platform))
         if not isinstance(rows, list):
             rows = []
         output: list[dict[str, str]] = []
@@ -1258,7 +1373,7 @@ class EmbeddedBrowserClient:
                 )
         if output:
             return output
-        generic = await self._run_script(REFERENCE_GENERIC_SCRIPT)
+        generic = await self._run_script(build_reference_generic_script(self.platform))
         if not isinstance(generic, list):
             generic = []
         for row in generic:
@@ -1275,14 +1390,84 @@ class EmbeddedBrowserClient:
                 )
         return output
 
+    async def _extract_references_from_script(
+        self,
+        reference_callback: Callable[[dict[str, str]], Any] | None = None,
+    ) -> tuple[list[dict[str, str]], int]:
+        """Extract references using a platform-specific DOM script.
+
+        Used by DeepSeek and similar platforms where source cards are rendered
+        directly in the answer area.
+        """
+        expand_script = r"""
+            (() => {
+              const visible = node => {
+                if (!node) return false;
+                const style = getComputedStyle(node);
+                const box = node.getBoundingClientRect();
+                return style.display !== 'none'
+                  && style.visibility !== 'hidden'
+                  && box.width > 0 && box.height > 0;
+              };
+              // DeepSeek hides source cards behind a summary row such as
+              // "搜索到 20 个网页" or just "20 个网页". Find and click it.
+              const candidates = [...document.querySelectorAll('*')].filter(node => {
+                if (!visible(node)) return false;
+                const text = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+                return /\d+\s*个网页/.test(text) && text.length < 80;
+              });
+              if (!candidates.length) return false;
+              // Prefer the deepest (most specific) candidate.
+              const label = candidates[candidates.length - 1];
+              const clickable = label.closest(
+                'button, [role="button"], div[class*="cursor-pointer"], div'
+              ) || label;
+              clickable.scrollIntoView({ block: 'center' });
+              clickable.click();
+              return true;
+            })()
+            """
+        rows: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for attempt in range(20):
+            if attempt < 3:
+                await self._run_script(expand_script)
+            raw = await self._run_script(self.platform.extract_references_script)
+            if isinstance(raw, list):
+                for item in raw:
+                    link = str(item.get("link") or item.get("href") or "").strip()
+                    title = str(item.get("title", "")).strip()
+                    if not link or link in seen:
+                        continue
+                    seen.add(link)
+                    row = {
+                        "link": link,
+                        "title": title,
+                        "platform": platform_for_url(link),
+                        "platform_type": category_for_url(link),
+                    }
+                    rows.append(row)
+                    if reference_callback is not None:
+                        callback_result = reference_callback(row)
+                        if inspect.isawaitable(callback_result):
+                            await callback_result
+            if rows:
+                break
+            await asyncio.sleep(REFERENCE_POLL_INTERVAL_SECONDS)
+        return rows, len(rows)
+
     async def _expand_references(
         self,
         reference_callback: Callable[[dict[str, str]], Any] | None = None,
     ) -> tuple[list[dict[str, str]], int]:
-        reference_summary_pattern = js_regex_pattern(REFERENCE_SUMMARY_PATTERN)
-        reference_rows_selector = js_string(", ".join(SELECTORS["reference_rows"]))
-        reference_expand_selectors = js_selector_list(SELECTORS["reference_expand"])
-        more_references_text = js_string(SELECTORS["reference_more_text"])
+        # DeepSeek-style platforms expose source cards directly in the DOM.
+        if self.platform.extract_references_script:
+            return await self._extract_references_from_script(reference_callback)
+
+        reference_summary_pattern = js_regex_pattern(self.platform.reference_summary_pattern)
+        reference_rows_selector = js_string(", ".join(self.platform.selectors["reference_rows"]))
+        reference_expand_selectors = js_selector_list(self.platform.selectors["reference_expand"])
+        more_references_text = js_string(self.platform.selectors["reference_more_text"])
         expected_script = (
             r"""
             (() => {

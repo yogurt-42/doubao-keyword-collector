@@ -8,9 +8,10 @@
 
 **豆包关键词资料采集器** 是一个本地-first 的非官方关键词调研工具。
 
-- 用户在桌面软件中管理多个豆包账号（每个账号独立浏览器数据目录）。
-- 批量向豆包发送关键词，自动点击“新对话 → 输入 → 发送”。
-- 等待回答完成后，自动展开“搜索 X 个关键词 / 参考 X 篇资料”区域，采集参考资料链接。
+- 用户在桌面软件中管理多个 AI 平台账号（每个账号独立浏览器数据目录）。
+- 已支持豆包、DeepSeek；后续平台可通过 `platforms/` 包按相同模式扩展。
+- 批量向 AI 平台发送关键词，自动点击“新对话 → 输入 → 发送”。
+- 等待回答完成后，自动展开参考资料区域，采集参考资料链接。
 - 将链接、平台、类型、日期等存入本地 SQLite，支持筛选、Excel 导出、信源对比。
 - 不保存 AI 回答正文，只采集思考过程引用区的链接。
 
@@ -49,6 +50,11 @@ D:\ai-source-capturer\doubao-keyword-collector
 │   ├── cookie_utils.py        # Cookie 解析与域名校验
 │   ├── desktop.py             # PySide 主窗口、标签页、浏览器桥
 │   ├── embedded_browser_client.py  # Qt WebEngine 浏览器客户端（桌面核心）
+│   ├── platforms/             # AI 平台抽象与配置
+│   │   ├── base.py            # AIPlatform 数据类
+│   │   ├── doubao.py          # 豆包平台配置
+│   │   ├── deepseek.py        # DeepSeek 平台配置
+│   │   └── registry.py        # PLATFORM_REGISTRY 注册表
 │   ├── models.py              # Pydantic 请求模型
 │   ├── native_dashboard.py    # 桌面管理界面（PySide6 实现）
 │   ├── platform_editor.py     # 运行时编辑/导入平台规则库
@@ -110,11 +116,12 @@ D:\ai-source-capturer\doubao-keyword-collector
 - `BrowserAccountPool`
   - 管理多个 `ManagedBrowserAccount`。
   - 每个账号有独立的 `user_data_dir`（`accounts/{account_id}`）。
-  - `discover_account_ids()`：扫描 `accounts/` 目录发现账号。
+  - `ai_platform`：账号绑定的 AI 平台（`doubao` / `deepseek`），持久化在账号目录 `.account-config.json` 与 `settings.json`。
+  - `discover_account_ids(platform=...)`：扫描 `accounts/` 目录发现账号，可按平台过滤。
   - `start_account()` / `stop_account()`：启动/停止浏览器。
   - `snapshots()`：并发获取所有账号状态，使用 `asyncio.Semaphore(3)` 限制同时检测数量，支持失败退避。
   - `set_category()` / `is_tab_hidden()` / `set_tab_hidden()` / `rename_account()` / `delete_account()`：账号元数据维护。
-- 桌面模式下，客户端实例由 `desktop.py` 的 `client_factory` 创建为 `EmbeddedBrowserClient`。
+- 桌面模式下，客户端实例由 `desktop.py` 的 `client_factory` 创建为 `EmbeddedBrowserClient`；命令行/服务端使用 `BrowserClient`。
 
 ### 5.3 浏览器客户端
 
@@ -122,23 +129,25 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 - `BrowserClient`
   - 基于 Playwright 的持久化浏览器上下文。
+  - 接收 `AIPlatform` 配置，按平台启动对应 `chat_url`、使用平台选择器、拦截平台 API。
   - `chat()`：发送关键词、等待回答、展开参考资料、返回链接。
-  - `import_cookies()`：导入 Cookie。
+  - `import_cookies()`：导入 Cookie（按平台域名过滤）。
   - 主要供无桌面环境或服务端模式使用。
 
 #### Qt 内嵌客户端：`embedded_browser_client.py`
 
 - `EmbeddedBrowserClient`
   - 通过 `QtBrowserBridge` 与 Qt WebEngine 交互。
+  - 接收 `AIPlatform` 配置，所有平台相关逻辑参数化。
   - 关键流程 `chat()`：
-    1. `inspect_session_state()` 检查登录状态。
+    1. `inspect_session_state()` 按平台 `session_cookie_names` 与 DOM 信号检查登录状态。
     2. 点击“新对话”，并校验输入框是否为新空白会话（失败会重试）。
     3. 输入关键词并派发 focus/keydown/input/change/keyup 事件，确保 React 状态更新。
-    4. 拦截 `fetch('/chat/completion')` 流式响应。
+    4. 拦截平台 `response_capture_url_patterns` 流式响应（如有）。
     5. 检测验证码/页面无响应。
     6. 先尝试点击发送按钮，未就绪或点击未生效时回退到按 Enter 发送，并校验输入框已清空。
-    7. 展开参考资料并提取链接。
-  - `_expand_references()`：多种选择器兜底展开参考摘要。
+    7. 展开参考资料并提取链接；DeepSeek 使用 `extract_references_script` DOM 脚本提取 Sources。
+  - `_expand_references()`：多种选择器兜底展开参考摘要；优先使用平台 `extract_references_script`。
   - `_ping_page()` / `_run_script_or_track_timeout()`：页面卡死检测。
 
 ### 5.4 调度器：`research_scheduler.py`
@@ -149,9 +158,10 @@ D:\ai-source-capturer\doubao-keyword-collector
   - `_dispatch_due_tasks()`：为每个到期任务选择可用账号并创建 worker。
   - `_run_task()`：
     - 替换 `{keyword}` 生成 prompt。
+    - 按任务 `ai_platform` 选择同平台账号。
     - 调用 `account.client.chat(..., reference_callback=save_reference)`。
     - 异常时根据类型暂停账号或重试任务。
-  - 账号选择逻辑：跳过 `busy_accounts`、跳过 `paused_until` 未到期的账号、检测登录/验证码/聊天就绪状态。**未启动的账号只有在 `Settings.auto_start_all_accounts=True` 时才会被自动启动，否则跳过。**
+  - 账号选择逻辑：只选择 `ai_platform` 与任务匹配的账号；跳过 `busy_accounts`、跳过 `paused_until` 未到期的账号、检测登录/验证码/聊天就绪状态。**未启动的账号只有在 `Settings.auto_start_all_accounts=True` 时才会被自动启动，否则跳过。**
   - `_check_schedules()`：在 `_dispatch_due_tasks()` 之前检查到期的 `research_schedules`，按模板最新配置生成一次性 `research_jobs` 并推进下一次执行时间。
 
 ### 5.5 数据层：`research_store.py`
@@ -161,9 +171,9 @@ D:\ai-source-capturer\doubao-keyword-collector
   - WAL 模式 + 外键约束；`synchronous = NORMAL`、`cache_size = -32768`。
   - 每个线程通过 `threading.local()` 复用一个连接，避免频繁开闭。
   - 核心表：
-    - `research_jobs`：任务批次（name、prompt_template、status、scheduled_at、interval_seconds、max_attempts、account_ids_json）。
+    - `research_jobs`：任务批次（name、prompt_template、status、scheduled_at、interval_seconds、max_attempts、account_ids_json、**ai_platform**）。
     - `research_tasks`：每个关键词一次执行（job_id、keyword、status、scheduled_at、account_id、attempt_count、result_count）。
-    - `research_results`：采集到的每条链接（job_id、task_id、keyword、link、platform、platform_type、account_id、collected_at/date、title）。
+    - `research_results`：采集到的每条链接（job_id、task_id、keyword、link、platform、platform_type、account_id、collected_at/date、title、**ai_platform**）。
     - `account_runtime`：账号使用/暂停状态。
     - `research_job_templates`：任务模板（name、keywords_json、prompt_template、interval_seconds、account_cooldown_seconds、max_attempts）。
     - `research_schedules`：触发计划（name、template_id、enabled、schedule_type、schedule_value、next_run_at、run_count、last_job_id）。
@@ -199,7 +209,8 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 ### 5.7 平台映射：`research_platforms.py`
 
-- 平台规则库的唯一事实来源。
+- 平台规则库的唯一事实来源（结果来源平台）。
+- 注意区分 **AI 平台**（`platforms/` 包，决定向哪个 AI 发起对话）与 **结果来源平台**（本文档，决定采集到的链接属于哪个网站）。
 - `PLATFORM_CATEGORIES`：15 个中文类型，如“综合新闻门户”“企业官网/品牌站”“短视频/社交媒体”等。
 - `PLATFORM_ENTRIES`：按 specificity 排序的 `{domain, name, category}` 列表（约 5000+ 条）。
 - `_DOMAIN_SUFFIX_MAP`：为加速 URL 匹配而预建的 domain → entry 字典；`entry_for_url()` 按 host 后缀从长到短查找，避免线性扫描。

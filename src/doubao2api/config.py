@@ -1,15 +1,51 @@
 from __future__ import annotations
 
 import json
+import logging
+import logging.handlers
 import os
 import sys
 import tempfile
 from contextlib import suppress
 from dataclasses import asdict, dataclass, fields
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 DEFAULT_BROWSER_CHANNEL = "msedge" if os.name == "nt" else ""
+
+
+def configure_logging(*, data_root: Path | None = None) -> Path:
+    """Route application logs to a rolling file under the data root.
+
+    Also emits to stdout so command-line users still see output.
+    """
+
+    root_dir = (data_root or default_data_root()).resolve()
+    log_dir = root_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"app-{datetime.now().strftime('%Y%m%d')}.log"
+
+    formatter = logging.Formatter("%(asctime)s %(levelname)-8s [%(name)s:%(lineno)d] %(message)s")
+
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_path,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers = []
+    root.addHandler(file_handler)
+    root.addHandler(console_handler)
+
+    return log_path
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -50,6 +86,8 @@ class Settings:
     auto_check_updates: bool = True
     last_ignored_version: str = ""
     update_channel: str = "stable"
+    default_ai_platform: str = "doubao"
+    account_platforms: dict[str, str] | None = None
     video_daily_credits: int = 10
     video_15s_credit_cost: int = 4
     video_10s_credit_cost: int = 3
@@ -60,6 +98,7 @@ class Settings:
         self.auto_replenish_account_categories = list(self.auto_replenish_account_categories or [])
         self.account_categories = dict(self.account_categories or {})
         self.account_tab_hidden = dict(self.account_tab_hidden or {})
+        self.account_platforms = dict(self.account_platforms or {})
         self.video_daily_credits = max(0, int(self.video_daily_credits))
         self.video_15s_credit_cost = max(0, int(self.video_15s_credit_cost))
         self.video_10s_credit_cost = max(0, int(self.video_10s_credit_cost))

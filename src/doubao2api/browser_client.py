@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import logging
 import re
 import time
 import uuid
@@ -12,13 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from .cookie_utils import parse_cookie_records
-from .selectors import (
-    REFERENCE_SUMMARY_PATTERN,
-    SELECTORS,
-)
+from .platforms import get_platform
+from .platforms.base import AIPlatform
 from .text_utils import _collect_text, _merge_text_fragments, _text_from_content
 
-CHAT_URL = "https://www.doubao.com/chat/"
+LOGGER = logging.getLogger(__name__)
+
 SESSION_COOKIE_NAMES = {"sessionid", "sessionid_ss"}
 
 RESPONSE_POLL_INTERVAL_SECONDS = 0.5
@@ -26,6 +26,10 @@ REFERENCE_POLL_INTERVAL_SECONDS = 0.3
 SEND_BUTTON_READY_TIMEOUT_SECONDS = 3.0
 REFERENCE_APPEAR_TIMEOUT_SECONDS = 3.0
 NEW_CONVERSATION_READY_TIMEOUT_SECONDS = 5.0
+
+
+def _default_platform() -> AIPlatform:
+    return get_platform("doubao")
 
 
 class BrowserUnavailableError(RuntimeError):
@@ -55,12 +59,14 @@ class BrowserClient:
         headless: bool = False,
         browser_channel: str = "",
         browser_executable_path: str = "",
+        platform: str | AIPlatform = "doubao",
     ) -> None:
         self.user_data_dir = user_data_dir.resolve()
         self.account_id = account_id
         self.headless = headless
         self.browser_channel = browser_channel
         self.browser_executable_path = browser_executable_path
+        self.platform = platform if isinstance(platform, AIPlatform) else get_platform(platform)
         self._playwright: Any = None
         self._context: Any = None
         self._page: Any = None
@@ -107,12 +113,21 @@ class BrowserClient:
             )
             pages = self._context.pages
             self._page = pages[0] if pages else await self._context.new_page()
-            if "doubao.com" not in (self._page.url or ""):
+            LOGGER.info(
+                "BrowserClient start for %s (platform=%s): current_url=%s, target=%s",
+                self.account_id,
+                self.platform.key,
+                self._page.url,
+                self.platform.chat_url,
+            )
+            if self.platform.chat_url not in (self._page.url or ""):
+                LOGGER.info("Navigating %s to %s", self.account_id, self.platform.chat_url)
                 await self._page.goto(
-                    CHAT_URL,
+                    self.platform.chat_url,
                     wait_until="domcontentloaded",
                     timeout=60_000,
                 )
+                LOGGER.info("Navigation finished: %s", self._page.url)
             self._started_at = time.monotonic()
         except Exception:
             await self.stop()
@@ -138,12 +153,18 @@ class BrowserClient:
     async def cookies(self) -> list[dict[str, Any]]:
         if not self._context:
             return []
-        return await self._context.cookies(["https://www.doubao.com"])
+        urls = [self.platform.chat_url] if self.platform.chat_url else []
+        for domain in self.platform.cookie_domains:
+            scheme = "https"
+            host = domain.lstrip(".")
+            urls.append(f"{scheme}://{host}")
+        return await self._context.cookies(urls)
 
     async def inspect_session_state(self) -> dict[str, Any]:
         cookies = await self.cookies()
         cookie_names = {item.get("name", "") for item in cookies}
-        logged_in = bool(cookie_names & SESSION_COOKIE_NAMES)
+        session_cookie_names = self.platform.session_cookie_names or SESSION_COOKIE_NAMES
+        logged_in = bool(cookie_names & session_cookie_names)
         has_ms_token = "msToken" in cookie_names
         page_url = self._page.url if self._page else ""
         return {
@@ -183,9 +204,10 @@ class BrowserClient:
     async def _install_response_capture(self) -> None:
         if not self._page:
             raise BrowserUnavailableError("Browser is not started")
+        capture_patterns = list(self.platform.response_capture_url_patterns or ["/chat/completion"])
         await self._page.evaluate(
             """
-            () => {
+            (patterns) => {
               if (window.__doubaoOssCaptureInstalled) return;
               const originalFetch = window.fetch.bind(window);
               window.__doubaoOssCapture = null;
@@ -194,7 +216,7 @@ class BrowserClient:
                 const url = typeof input === 'string' ? input : (input && input.url) || '';
                 const response = await originalFetch(...args);
                 const capture = window.__doubaoOssCapture;
-                if (capture && url.includes('/chat/completion') && response.body) {
+                if (capture && response.body && patterns.some(p => url.includes(p))) {
                   const cloned = response.clone();
                   (async () => {
                     try {
@@ -227,13 +249,14 @@ class BrowserClient:
               };
               window.__doubaoOssCaptureInstalled = true;
             }
-            """
+            """,
+            capture_patterns,
         )
 
     async def _send_via_ui(self, request_id: str, text: str) -> None:
         if not self._page:
             raise BrowserUnavailableError("Browser is not started")
-        composer_selectors = SELECTORS["composer"]
+        composer_selectors = self.platform.selectors["composer"]
         await self._page.evaluate(
             """
             ([requestId, text, composerSelectors]) => {
@@ -309,7 +332,7 @@ class BrowserClient:
             try:
                 if fresh_conversation:
                     await self._page.goto(
-                        CHAT_URL,
+                        self.platform.chat_url,
                         wait_until="domcontentloaded",
                         timeout=60_000,
                     )
@@ -350,7 +373,9 @@ class BrowserClient:
                 references: list[dict[str, str]] = []
                 expected_reference_count = 0
                 if collect_thinking_references:
-                    summary_regex = json.dumps(REFERENCE_SUMMARY_PATTERN, ensure_ascii=False)
+                    summary_regex = json.dumps(
+                        self.platform.reference_summary_pattern, ensure_ascii=False
+                    )
                     with contextlib.suppress(Exception):
                         await self._page.wait_for_function(
                             f"() => {{\n"
@@ -382,8 +407,23 @@ class BrowserClient:
     async def _reference_rows(self) -> list[dict[str, str]]:
         if not self._page:
             return []
-        reference_selector = ", ".join(SELECTORS["reference_rows"])
-        title_selector = SELECTORS["reference_title"]
+        if self.platform.extract_references_script:
+            try:
+                rows = await self._page.evaluate(self.platform.extract_references_script)
+                if isinstance(rows, list):
+                    output: list[dict[str, str]] = []
+                    seen: set[str] = set()
+                    for row in rows:
+                        link = str(row.get("link", "")).strip()
+                        if not link or link in seen:
+                            continue
+                        seen.add(link)
+                        output.append({"title": str(row.get("title", "")).strip(), "link": link})
+                    return output
+            except Exception:
+                pass
+        reference_selector = ", ".join(self.platform.selectors["reference_rows"])
+        title_selector = self.platform.selectors["reference_title"]
         reference_selector_json = json.dumps(reference_selector, ensure_ascii=False)
         title_selector_json = json.dumps(title_selector, ensure_ascii=False)
         rows = await self._page.evaluate(
@@ -408,7 +448,7 @@ class BrowserClient:
             }}
             """
         )
-        output: list[dict[str, str]] = []
+        output = []
         seen: set[str] = set()
         for row in rows:
             link = str(row.get("link", "")).strip()
@@ -425,7 +465,7 @@ class BrowserClient:
             raise BrowserUnavailableError("Browser is not started")
 
         summary_pattern = re.compile(
-            REFERENCE_SUMMARY_PATTERN,
+            self.platform.reference_summary_pattern,
             re.DOTALL,
         )
 
@@ -435,7 +475,7 @@ class BrowserClient:
             has_summary = await self._page.get_by_text(summary_pattern).count() > 0
 
         clicked = False
-        for selector in SELECTORS["reference_expand"]:
+        for selector in self.platform.selectors["reference_expand"]:
             with contextlib.suppress(Exception):
                 locator = self._page.locator(selector)
                 count = await locator.count()
@@ -450,7 +490,7 @@ class BrowserClient:
                     await locator.last.click(timeout=2500)
                     clicked = True
 
-        reference_selector = ", ".join(SELECTORS["reference_rows"])
+        reference_selector = ", ".join(self.platform.selectors["reference_rows"])
         reference_selector_json = json.dumps(reference_selector, ensure_ascii=False)
         with contextlib.suppress(Exception):
             await self._page.wait_for_function(
@@ -478,9 +518,8 @@ class BrowserClient:
             before = len(rows)
             clicked_more = False
             with contextlib.suppress(Exception):
-                more = self._page.get_by_text(
-                    re.compile(r"^\s*" + re.escape(SELECTORS["reference_more_text"]) + r"\s*$")
-                )
+                more_text = self.platform.selectors.get("reference_more_text", "")
+                more = self._page.get_by_text(re.compile(r"^\s*" + re.escape(more_text) + r"\s*$"))
                 for index in range(await more.count()):
                     target = more.nth(index)
                     if not await target.is_visible():

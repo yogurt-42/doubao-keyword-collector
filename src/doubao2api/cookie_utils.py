@@ -2,26 +2,29 @@ from __future__ import annotations
 
 from typing import Any
 
-_DOUBAO_DOMAINS = {"doubao.com", "www.doubao.com", ".doubao.com"}
 
-
-def _is_doubao_domain(domain: str) -> bool:
-    """Return True if the cookie domain belongs to Doubao."""
+def _is_target_domain(domain: str, allowed_domains: set[str]) -> bool:
+    """Return True if the cookie domain belongs to one of the allowed domains."""
 
     normalized = domain.strip().lower()
     if not normalized:
         return False
-    if normalized in _DOUBAO_DOMAINS:
+    if normalized in allowed_domains:
         return True
     root = normalized[1:] if normalized.startswith(".") else normalized
-    return root == "doubao.com" or root.endswith(".doubao.com")
+    for allowed in allowed_domains:
+        allowed_root = allowed[1:] if allowed.startswith(".") else allowed
+        if root == allowed_root or root.endswith(f".{allowed_root}"):
+            return True
+    return False
 
 
-def _parse_cookie_attributes(parts: list[str]) -> dict[str, Any]:
+def _parse_cookie_attributes(parts: list[str], allowed_domains: set[str]) -> dict[str, Any]:
     """Parse a single cookie's attributes from a semicolon-split list."""
 
+    default_domain = next(iter(sorted(allowed_domains)), ".doubao.com")
     record: dict[str, Any] = {
-        "domain": ".doubao.com",
+        "domain": default_domain,
         "path": "/",
         "secure": True,
     }
@@ -35,7 +38,7 @@ def _parse_cookie_attributes(parts: list[str]) -> dict[str, Any]:
             value = value.strip()
             lower = name.lower()
             if lower == "domain":
-                if _is_doubao_domain(value):
+                if _is_target_domain(value, allowed_domains):
                     record["domain"] = value if value.startswith(".") else f".{value}"
                 else:
                     record["domain"] = ""
@@ -52,7 +55,10 @@ def _parse_cookie_attributes(parts: list[str]) -> dict[str, Any]:
     return record
 
 
-def parse_cookie_records(cookie_text: str) -> list[dict[str, Any]]:
+def parse_cookie_records(
+    cookie_text: str,
+    allowed_domains: set[str] | str | None = None,
+) -> list[dict[str, Any]]:
     """Parse a cookie string into records suitable for browser cookie jars.
 
     Supports two common formats:
@@ -60,8 +66,26 @@ def parse_cookie_records(cookie_text: str) -> list[dict[str, Any]]:
     1. Simple `name=value; name2=value2` paste (default domain `.doubao.com`).
     2. Set-Cookie style with attributes (`name=value; Domain=...; Path=...`).
 
-    Any cookie whose explicit domain is not under `doubao.com` is skipped.
+    Any cookie whose explicit domain is not under one of the allowed domains is skipped.
     """
+
+    if allowed_domains is None:
+        allowed_domains = {".doubao.com"}
+    elif isinstance(allowed_domains, str):
+        allowed_domains = {allowed_domains}
+    else:
+        allowed_domains = set(allowed_domains)
+
+    # Normalize allowed domains: ensure leading dot for suffix matching.
+    normalized_allowed = set()
+    for domain in allowed_domains:
+        domain = domain.strip().lower()
+        if domain and not domain.startswith("."):
+            domain = f".{domain}"
+        normalized_allowed.add(domain)
+
+    # Choose a primary default domain for simple `name=value` pastes.
+    default_domain = next(iter(sorted(normalized_allowed)), ".doubao.com")
 
     text = cookie_text.strip()
     if text.lower().startswith("cookie:"):
@@ -88,8 +112,11 @@ def parse_cookie_records(cookie_text: str) -> list[dict[str, Any]]:
             value = value.strip()
             if not name:
                 continue
-            attrs = _parse_cookie_attributes(parts[1:])
+            attrs = _parse_cookie_attributes(parts[1:], normalized_allowed)
             if not attrs["domain"]:
+                continue
+            # Recheck the parsed domain against all allowed domains.
+            if not _is_target_domain(attrs["domain"], normalized_allowed):
                 continue
             records.append(
                 {
@@ -111,7 +138,7 @@ def parse_cookie_records(cookie_text: str) -> list[dict[str, Any]]:
                 {
                     "name": name,
                     "value": value.strip(),
-                    "domain": ".doubao.com",
+                    "domain": default_domain,
                     "path": "/",
                     "secure": True,
                 }

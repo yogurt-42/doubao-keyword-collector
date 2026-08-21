@@ -4,6 +4,7 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from .platforms import get_platform
 from .research_platforms import category_for_url, platform_for_url
 
 URL_RE = re.compile(r"https?://[^\s<>'\"\]\)）】}，。；、]+", re.IGNORECASE)
@@ -30,14 +31,20 @@ IGNORED_HOSTS = {
 PLATFORM_NAMES = {}
 
 
+def _ignored_hosts_for_platform(platform_key: str | None) -> set[str]:
+    platform = get_platform(platform_key)
+    return set(platform.ignored_hosts) | IGNORED_HOSTS
+
+
 def _clean_url(value: str) -> str:
     return value.strip().rstrip(".,;:!?，。；：！？、）)]}】>\"'")
 
 
-def _unwrap_source_url(value: str) -> str:
+def _unwrap_source_url(value: str, platform_key: str | None = None) -> str:
     url = _clean_url(value)
     parsed = urlsplit(url)
-    if (parsed.hostname or "").casefold() not in IGNORED_HOSTS:
+    ignored_hosts = _ignored_hosts_for_platform(platform_key)
+    if (parsed.hostname or "").casefold() not in ignored_hosts:
         return url
     query = parse_qs(parsed.query)
     for key in ("url", "target", "target_url", "redirect_url"):
@@ -85,6 +92,7 @@ def _collect_event_links(value: Any, output: list[tuple[str, str]]) -> None:
 def extract_research_links(
     answer_text: str,
     events: list[Any] | None = None,
+    platform_key: str | None = None,
 ) -> list[dict[str, str]]:
     candidates: list[tuple[str, str]] = []
     for title, url in MARKDOWN_LINK_RE.findall(answer_text or ""):
@@ -94,13 +102,14 @@ def extract_research_links(
     if events:
         _collect_event_links(events, candidates)
 
+    ignored_hosts = _ignored_hosts_for_platform(platform_key)
     found: list[dict[str, str]] = []
     seen: set[str] = set()
     for raw_url, title in candidates:
         url = _clean_url(raw_url)
         parsed = urlsplit(url)
         host = (parsed.hostname or "").casefold()
-        if parsed.scheme not in {"http", "https"} or not host or host in IGNORED_HOSTS:
+        if parsed.scheme not in {"http", "https"} or not host or host in ignored_hosts:
             continue
         normalized = parsed._replace(fragment="").geturl()
         if normalized in seen:
@@ -119,15 +128,17 @@ def extract_research_links(
 
 def normalize_thinking_references(
     references: list[dict[str, str]],
+    platform_key: str | None = None,
 ) -> list[dict[str, str]]:
-    """Normalize only links exposed by Doubao's thinking/reference controls."""
+    """Normalize only links exposed by thinking/reference controls."""
     found: list[dict[str, str]] = []
     seen: set[str] = set()
+    ignored_hosts = _ignored_hosts_for_platform(platform_key)
     for item in references:
-        url = _unwrap_source_url(item.get("link", ""))
+        url = _unwrap_source_url(item.get("link", ""), platform_key)
         parsed = urlsplit(url)
         host = (parsed.hostname or "").casefold()
-        if parsed.scheme not in {"http", "https"} or not host or host in IGNORED_HOSTS:
+        if parsed.scheme not in {"http", "https"} or not host or host in ignored_hosts:
             continue
         normalized = parsed._replace(fragment="").geturl()
         if normalized in seen:

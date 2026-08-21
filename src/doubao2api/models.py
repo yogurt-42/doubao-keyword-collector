@@ -60,6 +60,7 @@ class VideoGenerationRequest(BaseModel):
 
 class AccountProvisionRequest(BaseModel):
     account_id: str | None = None
+    ai_platform: str | None = None
     start_browser: bool = True
     background: bool = False
 
@@ -117,6 +118,7 @@ class ResearchJobCreateRequest(BaseModel):
     interval_seconds: int = Field(default=10, ge=1, le=86400)
     account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
     max_attempts: int = Field(default=2, ge=1, le=3)
+    ai_platform: str = "doubao"
 
 
 class ResearchJobTemplateCreateRequest(BaseModel):

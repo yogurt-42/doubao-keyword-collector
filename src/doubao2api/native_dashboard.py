@@ -70,6 +70,7 @@ from .account_manager import BrowserAccountPool, normalize_account_id  # noqa: E
 from .config import RuntimeConfig, SettingsStore  # noqa: E402
 from .embedded_browser_client import EmbeddedBrowserClient  # noqa: E402
 from .platform_editor import add_entries, all_entries  # noqa: E402
+from .platforms import get_platform, list_platforms  # noqa: E402
 from .research_export import build_results_workbook  # noqa: E402
 from .research_import import normalize_keywords, parse_keyword_file  # noqa: E402
 from .research_scheduler import ResearchScheduler  # noqa: E402
@@ -797,8 +798,9 @@ class DesktopBackend:
             user_data_dir: Path,
             account_id: str,
             _: RuntimeConfig,
+            platform: str,
         ) -> EmbeddedBrowserClient:
-            return EmbeddedBrowserClient(bridge, user_data_dir, account_id)
+            return EmbeddedBrowserClient(bridge, user_data_dir, account_id, platform)
 
         self.account_pool = BrowserAccountPool(
             self.settings_store,
@@ -1068,6 +1070,11 @@ class NativeDashboard(QWidget):
         self.job_name = QLineEdit()
         self.job_name.setPlaceholderText("例如：7 月品牌词调研")
         name_row.addWidget(self.job_name, 1)
+        name_row.addWidget(QLabel("AI 平台"))
+        self.job_platform = QComboBox()
+        for platform in list_platforms():
+            self.job_platform.addItem(platform.name, platform.key)
+        name_row.addWidget(self.job_platform)
         form.addLayout(name_row)
 
         keyword_header = QHBoxLayout()
@@ -1168,12 +1175,17 @@ class NativeDashboard(QWidget):
         controls_layout = QHBoxLayout(controls)
         self.new_account = QLineEdit()
         self.new_account.setPlaceholderText("账号名称，例如：账号01")
+        self.new_account_platform = QComboBox()
+        for platform in list_platforms():
+            self.new_account_platform.addItem(platform.name, platform.key)
         create_button = QPushButton("创建并在软件内打开")
         create_button.setObjectName("primaryButton")
         create_button.clicked.connect(self.create_account)
         refresh_button = QPushButton("刷新状态")
         refresh_button.clicked.connect(self.refresh_accounts)
         controls_layout.addWidget(self.new_account, 1)
+        controls_layout.addWidget(QLabel("平台:"))
+        controls_layout.addWidget(self.new_account_platform)
         controls_layout.addWidget(create_button)
         controls_layout.addWidget(refresh_button)
         layout.addWidget(controls)
@@ -2429,9 +2441,10 @@ class NativeDashboard(QWidget):
         text_box.setSpacing(3)
         title = QLabel(row["account_id"])
         title.setObjectName("cardTitle")
-        detail = QLabel(
-            "标签页已打开 · 独立登录环境" if row["started"] else "标签页未打开 · 独立登录环境"
-        )
+        platform_key = row.get("ai_platform", "doubao")
+        platform_name = get_platform(platform_key).name
+        tab_state = "标签页已打开" if row["started"] else "标签页未打开"
+        detail = QLabel(f"{tab_state} · {platform_name} · 独立登录环境")
         detail.setObjectName("muted")
         text_box.addWidget(title)
         text_box.addWidget(detail)
@@ -3258,7 +3271,13 @@ class NativeDashboard(QWidget):
         except ValueError as exc:
             QMessageBox.warning(self, "账号名称无效", str(exc))
             return
-        future = self.backend.submit(self.backend.account_pool.start_account(account_id))
+        platform = self.new_account_platform.currentData()
+
+        async def start() -> None:
+            self.backend.account_pool.set_account_platform(account_id, platform)
+            await self.backend.account_pool.start_account(account_id)
+
+        future = self.backend.submit(start())
 
         def completed(_: Any) -> None:
             self.new_account.clear()
@@ -3408,6 +3427,7 @@ class NativeDashboard(QWidget):
                 interval_seconds=self.interval_seconds.value(),
                 account_cooldown_seconds=0,
                 max_attempts=self.max_attempts.value(),
+                ai_platform=self.job_platform.currentData(),
             )
             self.backend.scheduler.wake()
             return job

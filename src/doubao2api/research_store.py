@@ -108,6 +108,7 @@ class ResearchStore:
                     account_cooldown_seconds INTEGER NOT NULL,
                     max_attempts INTEGER NOT NULL,
                     account_ids_json TEXT NOT NULL,
+                    ai_platform TEXT NOT NULL DEFAULT 'doubao',
                     created_at TEXT NOT NULL,
                     started_at TEXT,
                     finished_at TEXT,
@@ -222,6 +223,19 @@ class ResearchStore:
                     platform_updates,
                 )
             self._ensure_platform_type_column(connection)
+            self._ensure_ai_platform_column(connection)
+
+    def _ensure_ai_platform_column(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(research_jobs)").fetchall()
+        }
+        if "ai_platform" not in columns:
+            connection.execute(
+                "ALTER TABLE research_jobs ADD COLUMN ai_platform TEXT NOT NULL DEFAULT 'doubao'"
+            )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_research_jobs_platform ON research_jobs(ai_platform)"
+        )
 
     def _ensure_platform_type_column(self, connection: sqlite3.Connection) -> None:
         columns = {
@@ -261,6 +275,7 @@ class ResearchStore:
         interval_seconds: int,
         account_cooldown_seconds: int,
         max_attempts: int,
+        ai_platform: str = "doubao",
     ) -> dict[str, Any]:
         job_id = uuid.uuid4().hex
         created_at = iso_now()
@@ -270,8 +285,9 @@ class ResearchStore:
                 """
                 INSERT INTO research_jobs (
                     id, name, prompt_template, status, scheduled_at, interval_seconds,
-                    account_cooldown_seconds, max_attempts, account_ids_json, created_at
-                ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)
+                    account_cooldown_seconds, max_attempts, account_ids_json, ai_platform,
+                    created_at
+                ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -282,6 +298,7 @@ class ResearchStore:
                     account_cooldown_seconds,
                     max_attempts,
                     json.dumps(account_ids, ensure_ascii=False),
+                    ai_platform,
                     created_at,
                 ),
             )
@@ -468,7 +485,8 @@ class ResearchStore:
             rows = connection.execute(
                 """
                 SELECT t.*, j.prompt_template, j.account_ids_json,
-                    j.interval_seconds, j.account_cooldown_seconds, j.max_attempts
+                    j.interval_seconds, j.account_cooldown_seconds, j.max_attempts,
+                    j.ai_platform
                 FROM research_tasks t
                 JOIN research_jobs j ON j.id = t.job_id
                 WHERE t.status = 'pending' AND j.status = 'running'
@@ -1186,7 +1204,7 @@ class ResearchStore:
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                SELECT r.*, j.name AS job_name
+                SELECT r.*, j.name AS job_name, j.ai_platform AS ai_platform
                 FROM research_results r
                 JOIN research_jobs j ON j.id = r.job_id
                 {where}

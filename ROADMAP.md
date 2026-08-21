@@ -1,7 +1,7 @@
 # 开发路线图
 
 > 记录已完成大事记与下一阶段计划。
-> 最近一次更新：2026-08-20
+> 最近一次更新：2026-08-21
 
 ---
 
@@ -30,54 +30,28 @@
 | 19 | 应用内下载更新：单文件/便携版 asset 下载、进度条、SHA256/完整性兜底校验、本地缓存 | `update_checker.py`, `native_dashboard.py` |
 | 20 | 豆包新布局兼容：适配 `contenteditable` 输入框与新版参考资料展开按钮 | `selectors.py`, `embedded_browser_client.py` |
 | 21 | Windows 自替换 updater：便携版目录替换、单文件 exe 替换、独立 helper、备份回滚 | `update_installer.py`, `update_installer_helper.py`, `native_dashboard.py`, 打包脚本 |
+| 22 | **多平台采集架构（v1.1.0）**：新增 `platforms/` 包抽象 `AIPlatform`；接入 DeepSeek；账号/任务绑定 AI 平台；调度器按平台过滤；导出增加“AI 平台”列；桌面端与命令行端浏览器客户端全面平台化 | `platforms/`, `account_manager.py`, `research_scheduler.py`, `research_store.py`, `research_export.py`, `native_dashboard.py`, `server.py`, `models.py`, `embedded_browser_client.py`, `browser_client.py`, `cookie_utils.py`, `research_links.py`, `desktop.py`, `windows_entry.py`, `__main__.py`, `config.py` |
 
 > 各阶段技术细节参见 `CLAUDE.md` 与 `AI_REFERENCE.md`。
 
 ---
 
-## 下一阶段：应用内自动更新（v1.1.0 规划）
+## 下一阶段：v1.2.0 规划
 
 ### 目标
 
-让用户在软件内部就能检查、下载并安装新版本，不必手动去 GitHub Release 页面下载覆盖。
+持续扩展更多 AI 平台（如 Kimi、通义千问等），完善多平台体验；优化模板/定时任务与平台的绑定；提升采集稳定性与可观测性。
 
-### 设计原则
+### 候选任务
 
-- **优先支持便携版，再支持单文件版**：便携版解压替换最稳；单文件版需要 Windows 自替换 updater。
-- **用户可控**：默认开启“启动时检查更新”，但可在设置里关闭；支持手动检查。
-- **透明**：显示下一版本的 Release notes（body），让用户知道更新了什么。
-- **不静默更新**：下载完成后必须经用户确认才会替换文件并重启。
-- **失败可回滚**：替换前保留旧文件/文件夹为 `.bak`，安装失败时理论上可手动恢复。
+| 任务 | 目标 | 主要文件 |
+|------|------|----------|
+| 更多 AI 平台 | 按 `platforms/` 模式接入 Kimi、通义千问等 | `platforms/` |
+| 模板/定时任务绑定平台 | `research_job_templates` 与 `research_schedules` 增加 `ai_platform` 列 | `research_store.py`, `models.py`, `native_dashboard.py`, `server.py` |
+| 平台响应捕获完善 | 实测并补充 DeepSeek 网络响应捕获模式 | `platforms/deepseek.py` |
+| 采集可观测性 | 在日志中记录每个任务的平台、账号、结果数、耗时 | `research_scheduler.py` |
 
-### 新增 UI 板块
-
-在 Native Dashboard 最后新增一个 **“检查更新”** 页签，包含：
-
-- 当前版本号。
-- “启动时自动检查更新”开关（持久化到 `settings.json`）。
-- “立即检查更新”按钮。
-- 最新版本信息区：版本号、发布时间、Release notes（body）。
-- 下载/安装按钮与下载进度条。
-
-### MVP 任务拆分
-
-| 任务 | 目标 | 主要文件 | 状态 |
-|------|------|----------|------|
-| **Task 1：版本检查模块** | 封装 GitHub Releases API；解析 `tag_name`；语义化版本比较；匹配单文件 exe / 便携 zip asset；支持“跳过此版本”“禁用检查”；API 被限流时先退化为 302 跳转方案，再进一步解析 Release 页面 HTML 获取 release notes、asset 链接与发布时间 | `src/doubao2api/update_checker.py` | ✅ 已完成 |
-| **Task 2：设置持久化** | `Settings` 新增 `auto_check_updates`（默认 True）、`last_ignored_version`、`update_channel` | `src/doubao2api/config.py` | ✅ 已完成 |
-| **Task 3：检查更新页签** | 在 Native Dashboard 新增“检查更新”页签；支持开关、手动检查、展示 Release notes、打开下载页面 | `src/doubao2api/native_dashboard.py` | ✅ 已完成 |
-| **Task 4：下载与校验** | 后台下载 asset；分别提供单文件版 / 便携版下载按钮；带进度条；若 release 提供 `.sha256` 则校验，否则做完整性兜底（大小非零、exe MZ 头、zip 格式）；下载完成后显示本地文件路径；更新信息本地缓存 | `src/doubao2api/update_checker.py`, `src/doubao2api/native_dashboard.py` | ✅ 已完成 |
-| **Task 5：Windows 自替换 updater** | 便携版：解压 side 目录后整体替换；单文件 exe：启动独立 helper 等待原进程退出后替换 exe 并重启；旧版本保留为 `.bak` | `src/doubao2api/update_installer.py`, `src/doubao2api/update_installer_helper.py`, `packaging/update_installer_helper.spec`, 主 spec | ✅ 已完成 |
-| **Task 6：测试与文档** | 版本比较、asset 匹配、下载/校验、本地缓存、updater 准备/解压/备份单元测试；同步 `ROADMAP.md` / `CLAUDE.md` / `AI_REFERENCE.md` | `tests/test_update_checker.py`, `tests/test_update_installer.py` + docs | ✅ 已完成 |
-
-### 关键流程
-
-1. **启动时检查**：程序启动 3 秒后异步请求 GitHub Releases API，5 秒超时；若触发未认证速率限制，退化为读取 `/releases/latest` 的 302 跳转地址，并进一步解析 Release 页面 HTML 获取版本号、release notes、asset 链接与发布时间。
-2. **发现新版本**：比较本地版本与远端 `tag_name`；若用户已选择“跳过此版本”则不再提示。
-3. **展示 Release notes**：把 release body 以纯文本/Markdown 形式显示在“检查更新”页签。
-4. **用户点击下载**：根据当前进程形态判断自己是单文件版还是便携版，下载对应 asset 到 `%TEMP%`。
-5. **下载完成**：显示“立即安装”；用户确认后主程序退出，启动 updater。
-6. **替换与重启**：
+---
    - 通用：先清理已存在的 `.bak` 备份，只保留即将生成的最新一份。
    - 便携版：解压新 zip 到临时目录 → 启动独立 helper → 原进程退出 → 将旧文件夹重命名为 `.bak` → 移入新文件夹 → 启动新 exe。
    - 单文件版：确认新 exe 已下载到 `%TEMP%` → 启动独立 helper → 原进程退出 → 将旧 exe 重命名为 `.bak` → 移入新 exe → 启动新 exe。

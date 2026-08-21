@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -11,6 +12,8 @@ from .account_manager import BrowserAccountPool
 from .browser_client import ReferenceExpansionError
 from .research_links import normalize_thinking_references
 from .research_store import ResearchStore, _compute_next_run, local_now
+
+LOGGER = logging.getLogger(__name__)
 
 RISK_MARKERS = (
     "captcha",
@@ -195,11 +198,37 @@ class ResearchScheduler:
             self.wake()
 
     async def _select_account(self, task: dict[str, Any]) -> str | None:
-        candidates = task["account_ids"] or self.account_pool.discover_account_ids()
+        task_platform = task.get("ai_platform", "doubao")
+        candidates = task["account_ids"]
+        LOGGER.info(
+            "Selecting account for task %s (platform=%s, explicit_candidates=%s)",
+            task["id"],
+            task_platform,
+            bool(candidates),
+        )
+        if not candidates:
+            try:
+                candidates = self.account_pool.discover_account_ids(platform=task_platform)
+            except TypeError:
+                candidates = self.account_pool.discover_account_ids()
+        LOGGER.info("Candidate accounts for task %s: %s", task["id"], candidates)
         now = local_now()
         available: list[tuple[datetime, str]] = []
         for account_id in candidates:
             if account_id in self._busy_accounts:
+                LOGGER.info("Account %s is busy, skipping", account_id)
+                continue
+            try:
+                account_platform = self.account_pool.get_account_platform(account_id)
+            except AttributeError:
+                account_platform = "doubao"
+            LOGGER.info(
+                "Account %s platform=%s (matches_task=%s)",
+                account_id,
+                account_platform,
+                account_platform == task_platform,
+            )
+            if account_platform != task_platform:
                 continue
             runtime = self.store.account_runtime(account_id)
             paused_until = _datetime_or_none(runtime.get("paused_until"))
@@ -265,6 +294,7 @@ class ResearchScheduler:
                     )
                     continue
                 self.store.resume_account(account_id)
+                LOGGER.info("Selected account %s for task %s", account_id, task["id"])
                 return account_id
             except (TimeoutError, asyncio.TimeoutError):
                 self.store.pause_account(
@@ -294,7 +324,9 @@ class ResearchScheduler:
 
             def save_reference(reference: dict[str, str]) -> None:
                 nonlocal saved_count
-                for item in normalize_thinking_references([reference]):
+                for item in normalize_thinking_references(
+                    [reference], platform_key=task.get("ai_platform")
+                ):
                     inserted = self.store.add_result(
                         task["id"],
                         item=item,
@@ -309,7 +341,7 @@ class ResearchScheduler:
 
             self.store.update_task_progress(
                 task["id"],
-                "关键词已开始发送，随后会等待豆包回答并展开参考资料",
+                "关键词已开始发送，随后会等待回答并展开参考资料",
             )
 
             async def _chat_with_captcha_poll() -> dict[str, Any]:
@@ -352,9 +384,12 @@ class ResearchScheduler:
                 return
             self.store.update_task_progress(
                 task["id"],
-                "豆包回答与参考资料已读取，正在保存链接",
+                "回答与参考资料已读取，正在保存链接",
             )
-            links = normalize_thinking_references(result.get("thinking_references", []))
+            links = normalize_thinking_references(
+                result.get("thinking_references", []),
+                platform_key=task.get("ai_platform"),
+            )
             self.store.complete_task(
                 task["id"],
                 answer="",

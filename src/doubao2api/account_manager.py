@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import time
 from collections.abc import Callable
@@ -12,11 +13,15 @@ from typing import Any
 
 from .browser_client import BrowserClient
 from .config import RuntimeConfig, SettingsStore
+from .platforms import DEFAULT_PLATFORM_KEY
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_ACCOUNT_ID = "default"
 ACCOUNT_ID_MAX_LENGTH = 64
 ACCOUNT_ID_EXTRA_CHARS = "._-"
 ACCOUNT_BROWSER_CONFIG_FILENAME = ".doubao-browser.json"
+ACCOUNT_CONFIG_FILENAME = ".account-config.json"
 
 CACHE_CLEAR_DIRECTORY_NAMES = {
     "cache",
@@ -71,6 +76,7 @@ class ManagedBrowserAccount:
     account_id: str
     user_data_dir: Path
     client: BrowserClient
+    ai_platform: str = DEFAULT_PLATFORM_KEY
 
 
 class BrowserAccountPool:
@@ -78,7 +84,7 @@ class BrowserAccountPool:
         self,
         store: SettingsStore,
         runtime: RuntimeConfig,
-        client_factory: Callable[[Path, str, RuntimeConfig], Any] | None = None,
+        client_factory: Callable[[Path, str, RuntimeConfig, str], Any] | None = None,
         runtime_store: Any | None = None,
     ) -> None:
         self.store = store
@@ -108,19 +114,26 @@ class BrowserAccountPool:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def discover_account_ids(self) -> list[str]:
+    def discover_account_ids(self, platform: str | None = None) -> list[str]:
         discovered = {self.default_account_id}
         for child in self.accounts_root.iterdir():
-            if child.is_dir() and not child.is_symlink() and is_valid_account_id(child.name):
+            if (
+                child.is_dir()
+                and not child.is_symlink()
+                and is_valid_account_id(child.name)
+                and (platform is None or self.get_account_platform(child.name) == platform)
+            ):
                 discovered.add(child.name)
         return sorted(discovered, key=lambda value: (value != self.default_account_id, value))
 
     def _build_client(self, account_id: str) -> Any:
+        platform = self.get_account_platform(account_id)
         if self.client_factory is not None:
             return self.client_factory(
                 self.get_user_data_path(account_id),
                 account_id,
                 self.runtime,
+                platform,
             )
         return BrowserClient(
             self.get_user_data_path(account_id),
@@ -128,6 +141,49 @@ class BrowserAccountPool:
             headless=self.runtime.headless,
             browser_channel=self.runtime.browser_channel,
             browser_executable_path=self.runtime.browser_executable_path,
+            platform=platform,
+        )
+
+    def _account_config_path(self, account_id: str) -> Path:
+        path = self.get_user_data_path(account_id)
+        new_path = path / ACCOUNT_CONFIG_FILENAME
+        if new_path.exists():
+            return new_path
+        old_path = path / ACCOUNT_BROWSER_CONFIG_FILENAME
+        if old_path.exists():
+            return old_path
+        return new_path
+
+    def get_account_platform(self, account_id: str | None) -> str:
+        normalized = normalize_account_id(account_id, self.default_account_id)
+        config = self.account_browser_config(normalized)
+        platform = config.get("ai_platform", "")
+        if platform:
+            LOGGER.info("Account %s platform from config: %s", normalized, platform)
+            return platform
+        platform = self.store.settings.account_platforms.get(normalized, "")
+        if platform:
+            LOGGER.info("Account %s platform from settings: %s", normalized, platform)
+            return platform
+        platform = self.store.settings.default_ai_platform or DEFAULT_PLATFORM_KEY
+        LOGGER.info("Account %s platform fallback: %s", normalized, platform)
+        return platform
+
+    def set_account_platform(self, account_id: str, platform: str) -> None:
+        normalized = normalize_account_id(account_id, self.default_account_id)
+        path = self.ensure_account_environment(normalized) / ACCOUNT_CONFIG_FILENAME
+        config = self.account_browser_config(normalized)
+        old_platform = config.get("ai_platform", "")
+        config["ai_platform"] = platform
+        path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.store.settings.account_platforms[normalized] = platform
+        self.store.save()
+        LOGGER.info(
+            "Set platform for account %s: %s -> %s (config=%s)",
+            normalized,
+            old_platform or "(unset)",
+            platform,
+            path,
         )
 
     async def start_account(self, account_id: str | None) -> ManagedBrowserAccount:
@@ -148,9 +204,12 @@ class BrowserAccountPool:
 
     async def _start_account_inner(self, account_id: str) -> ManagedBrowserAccount:
         path = self.ensure_account_environment(account_id)
+        platform = self.get_account_platform(account_id)
+        LOGGER.info("Starting account %s with platform %s", account_id, platform)
         client = self._build_client(account_id)
         await client.start()
-        managed = ManagedBrowserAccount(account_id, path, client)
+        platform = self.get_account_platform(account_id)
+        managed = ManagedBrowserAccount(account_id, path, client, ai_platform=platform)
         async with self._lock:
             self._managed[account_id] = managed
         return managed
@@ -206,6 +265,7 @@ class BrowserAccountPool:
             shutil.rmtree(path)
         self.store.settings.account_categories.pop(normalized, None)
         self.store.settings.account_tab_hidden.pop(normalized, None)
+        self.store.settings.account_platforms.pop(normalized, None)
         self.store.save()
 
     async def rename_account(self, account_id: str, new_account_id: str) -> str:
@@ -227,6 +287,9 @@ class BrowserAccountPool:
         tab_hidden = self.store.settings.account_tab_hidden.pop(old, False)
         if tab_hidden:
             self.store.settings.account_tab_hidden[new] = True
+        platform = self.store.settings.account_platforms.pop(old, "")
+        if platform:
+            self.store.settings.account_platforms[new] = platform
         self.store.save()
         return new
 
@@ -281,7 +344,7 @@ class BrowserAccountPool:
         self.store.save()
 
     def account_browser_config(self, account_id: str) -> dict[str, Any]:
-        path = self.get_user_data_path(account_id) / ACCOUNT_BROWSER_CONFIG_FILENAME
+        path = self._account_config_path(account_id)
         if not path.exists():
             return {}
         try:
@@ -323,6 +386,7 @@ class BrowserAccountPool:
             "chat_ready": False,
             "has_ms_token": False,
             "needs_captcha": False,
+            "ai_platform": self.get_account_platform(account_id),
             "paused_until": paused_until,
             "pause_reason": pause_reason,
             "is_paused": is_paused,
@@ -391,6 +455,7 @@ class BrowserAccountPool:
             "chat_ready": state["chat_ready"],
             "has_ms_token": state["has_ms_token"],
             "needs_captcha": state["needs_captcha"],
+            "ai_platform": self.get_account_platform(normalized),
             "paused_until": paused_until,
             "pause_reason": pause_reason,
             "is_paused": is_paused,

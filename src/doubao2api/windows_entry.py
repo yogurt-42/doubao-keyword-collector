@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import multiprocessing
 import os
 
-from doubao2api.config import RuntimeConfig
+from doubao2api.config import RuntimeConfig, configure_logging
 
 BACKGROUND_BROWSER_FLAGS = (
     "--disable-background-timer-throttling",
@@ -32,6 +33,7 @@ def _show_error(message: str) -> None:
 
 def main() -> None:
     multiprocessing.freeze_support()
+    log_path = configure_logging()
     _configure_background_browser()
     runtime = RuntimeConfig.from_env()
     try:
@@ -39,7 +41,8 @@ def main() -> None:
 
         run_desktop(runtime)
     except Exception as exc:
-        _show_error(f"软件启动失败：\n\n{exc}")
+        logging.exception("Desktop launch failed")
+        _show_error(f"软件启动失败：\n\n{exc}\n\n日志：{log_path}")
 
 
 if __name__ == "__main__":

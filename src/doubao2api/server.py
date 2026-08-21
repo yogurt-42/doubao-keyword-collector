@@ -49,6 +49,7 @@ from .models import (
     VideoGenerationRequest,
 )
 from .platform_editor import PLATFORM_CATEGORIES, add_entries, all_entries
+from .platforms import list_platforms
 from .research_export import build_long_tail_workbook, build_results_workbook
 from .research_import import normalize_keywords, parse_keyword_file
 from .research_scheduler import ResearchScheduler
@@ -172,7 +173,7 @@ def create_app(
     *,
     store: SettingsStore | None = None,
     runtime: RuntimeConfig | None = None,
-    client_factory: Callable[[Path, str, RuntimeConfig], Any] | None = None,
+    client_factory: Callable[[Path, str, RuntimeConfig, str], Any] | None = None,
 ) -> FastAPI:
     settings_store = store or SettingsStore()
     runtime_config = runtime or RuntimeConfig.from_env()
@@ -436,6 +437,9 @@ def create_app(
                 "video": VIDEO_MODELS,
                 "audio": AUDIO_MODELS,
             },
+            "ai_platforms": [
+                {"key": p.key, "name": p.name, "models": p.chat_models} for p in list_platforms()
+            ],
             "accounts": {
                 "default_account_id": account_pool.default_account_id,
                 "accounts_root": str(account_pool.accounts_root),
@@ -527,6 +531,7 @@ def create_app(
                 interval_seconds=body.interval_seconds,
                 account_cooldown_seconds=body.account_cooldown_seconds,
                 max_attempts=body.max_attempts,
+                ai_platform=body.ai_platform,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -942,6 +947,8 @@ def create_app(
     async def admin_start_account(body: AccountProvisionRequest) -> dict[str, Any]:
         account_id = normalize_account_id(body.account_id, account_pool.default_account_id)
         account_pool.ensure_account_environment(account_id)
+        if body.ai_platform:
+            account_pool.set_account_platform(account_id, body.ai_platform)
         if body.start_browser:
             if body.background:
                 asyncio.create_task(account_pool.start_account(account_id))

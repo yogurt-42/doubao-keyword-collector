@@ -1,6 +1,6 @@
 import pytest
 
-from doubao2api.cookie_utils import _is_doubao_domain, parse_cookie_records
+from doubao2api.cookie_utils import _is_target_domain, parse_cookie_records
 
 
 @pytest.mark.parametrize(
@@ -16,8 +16,8 @@ from doubao2api.cookie_utils import _is_doubao_domain, parse_cookie_records
         ("", False),
     ],
 )
-def test_is_doubao_domain(domain: str, expected: bool) -> None:
-    assert _is_doubao_domain(domain) is expected
+def test_is_target_domain(domain: str, expected: bool) -> None:
+    assert _is_target_domain(domain, {".doubao.com"}) is expected
 
 
 def test_parse_simple_cookie_string() -> None:
@@ -80,3 +80,21 @@ def test_parse_ignores_malformed_parts() -> None:
     records = parse_cookie_records("sessionid=abc; ; nameonly")
     assert len(records) == 1
     assert records[0]["name"] == "sessionid"
+
+
+def test_parse_with_allowed_domain_set() -> None:
+    records = parse_cookie_records(
+        "token=abc; Domain=.deepseek.com; Path=/",
+        allowed_domains={".deepseek.com"},
+    )
+    assert len(records) == 1
+    assert records[0]["domain"] == ".deepseek.com"
+
+
+def test_parse_with_string_domain() -> None:
+    records = parse_cookie_records(
+        "token=abc; Domain=.deepseek.com; Path=/",
+        allowed_domains=".deepseek.com",
+    )
+    assert len(records) == 1
+    assert records[0]["domain"] == ".deepseek.com"

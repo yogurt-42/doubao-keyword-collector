@@ -2,9 +2,8 @@ import re
 
 import pytest
 
+from doubao2api.platforms.doubao import REFERENCE_SUMMARY_PATTERN, SELECTORS
 from doubao2api.selectors import (
-    REFERENCE_SUMMARY_PATTERN,
-    SELECTORS,
     js_regex_alternation,
     js_regex_pattern,
     js_selector_list,

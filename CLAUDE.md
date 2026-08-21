@@ -8,7 +8,7 @@
 
 **豆包关键词资料采集器** `v1.0.3`
 
-本地优先的非官方关键词调研工具：管理多个豆包账号，批量提问，自动展开回答中的“参考资料”区域，提取资料链接、平台名、平台类型，存入本地 SQLite，支持筛选、导出 Excel、信源对比、长尾信源分析。
+本地优先的非官方 AI 关键词调研工具：管理多个 AI 平台账号（首发豆包，已扩展 DeepSeek），批量提问，自动展开回答中的“参考资料”区域，提取资料链接、平台名、平台类型，存入本地 SQLite，支持筛选、导出 Excel、信源对比、长尾信源分析。
 
 ---
 
@@ -47,6 +47,12 @@ D:\ai-source-capturer\doubao-keyword-collector
 │   ├── account_manager.py        # 账号池
 │   ├── browser_client.py         # Playwright 客户端
 │   ├── embedded_browser_client.py# Qt WebEngine 客户端
+│   ├── platforms/                # AI 平台抽象与配置
+│   │   ├── base.py               # AIPlatform 数据类
+│   │   ├── doubao.py             # 豆包平台配置
+│   │   ├── deepseek.py           # DeepSeek 平台配置
+│   │   ├── registry.py           # 平台注册表
+│   │   └── __init__.py           # 入口
 │   ├── research_scheduler.py     # 任务调度器
 │   ├── research_store.py         # SQLite 数据层
 │   ├── research_platforms.py     # 平台规则库（域名 → 平台名 → 类型）
@@ -71,15 +77,16 @@ D:\ai-source-capturer\doubao-keyword-collector
 |------|-----------|------------------|
 | `native_dashboard.py` | 桌面端 8 页签 UI | 所有界面交互 |
 | `desktop.py` | Qt 主窗口与账号标签管理 | 账号页签生命周期 |
-| `account_manager.py` | 账号池创建/启动/快照/重命名/删除 | 账号环境页 |
-| `research_scheduler.py` | 调度关键词任务、处理风控/重试 | 新建采集、任务执行 |
+| `account_manager.py` | 账号池创建/启动/快照/重命名/删除；账号 AI 平台绑定 | 账号环境页 |
+| `research_scheduler.py` | 调度关键词任务、按平台过滤账号、处理风控/重试 | 新建采集、任务执行 |
 | `research_store.py` | SQLite 读写、schema | 所有数据持久化 |
-| `research_platforms.py` | URL → 平台名/类型映射库 | 导出、结果页、同步按钮 |
+| `research_platforms.py` | URL → 平台名/类型映射库（结果来源平台） | 导出、结果页、同步按钮 |
 | `platform_editor.py` | 运行时导入规则并持久化 | 平台信息页 |
 | `research_export.py` | 生成 Excel | 导出按钮 |
 | `research_import.py` | 解析关键词 Excel/CSV | 新建采集导入 |
 | `browser_client.py` / `embedded_browser_client.py` | 浏览器自动化与链接提取 | 采集稳定性 |
-| `selectors.py` | DOM 选择器与验证码文案 | 豆包页面结构变化时需改 |
+| `platforms/` | AI 平台配置（URL、选择器、Cookie、模型） | 新增/修改 AI 平台 |
+| `selectors.py` | DOM 选择器 JS 辅助函数 | 通用选择器工具 |
 | `server.py` | FastAPI 与 OpenAI 兼容接口 | Web 端、外部 API |
 | `models.py` | Pydantic 请求模型 | API 参数校验 |
 
@@ -104,9 +111,9 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 | 表 | 存储内容 | 关键字段 |
 |----|---------|----------|
-| `research_jobs` | 任务批次 | `name`, `prompt_template`, `status`, `interval_seconds`, `max_attempts`, `account_ids_json` |
+| `research_jobs` | 任务批次 | `name`, `prompt_template`, `status`, `interval_seconds`, `max_attempts`, `account_ids_json`, `ai_platform` |
 | `research_tasks` | 每个关键词一次执行 | `job_id`, `keyword`, `status`, `scheduled_at`, `account_id`, `attempt_count`, `result_count` |
-| `research_results` | 采集到的链接 | `job_id`, `task_id`, `keyword`, `link`, `platform`, `platform_type`, `account_id`, `collected_at/date`, `title` |
+| `research_results` | 采集到的链接 | `job_id`, `task_id`, `keyword`, `link`, `platform`, `platform_type`, `account_id`, `collected_at/date`, `title`, `ai_platform` |
 | `account_runtime` | 账号使用/暂停状态 | `last_used_at`, `paused_until`, `pause_reason` |
 | `research_job_templates` | 任务模板（关键词、提问模板、间隔、尝试次数等） | `name`, `keywords_json`, `prompt_template`, `interval_seconds`, `account_cooldown_seconds`, `max_attempts` |
 | `research_schedules` | 触发计划（引用模板，按间隔/一次性/每日定时触发） | `name`, `template_id`, `enabled`, `schedule_type`, `schedule_value`, `next_run_at`, `run_count`, `last_job_id` |
@@ -115,7 +122,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 ## 8. 核心数据流（一句话）
 
-用户在 `native_dashboard.py` 创建任务 → `research_store.py` 拆分为 `research_tasks` → `research_scheduler.py` 每 2 秒轮询并选可用账号 → 浏览器客户端打开豆包提问 → 展开参考资料 → 逐条回调保存到 `research_results` → UI 结果页/历史任务页读取并展示，导出时调用 `research_export.py` 生成 Excel。
+用户在 `native_dashboard.py` 创建任务（选择 AI 平台） → `research_store.py` 拆分为 `research_tasks` → `research_scheduler.py` 每 2 秒轮询并选同平台可用账号 → 浏览器客户端打开对应 AI 平台提问 → 展开参考资料 → 逐条回调保存到 `research_results` → UI 结果页/历史任务页读取并展示，导出时调用 `research_export.py` 生成 Excel。
 
 ---
 
@@ -138,7 +145,9 @@ D:\ai-source-capturer\doubao-keyword-collector
 - Phase 3 性能优化专项：账号快照 `Semaphore(3)` 并发限制、调度器空闲时 5 秒动态休眠、SQLite 连接按线程复用 + NORMAL/sync + 32MB cache + 补充三个索引、Native Dashboard 账号环境页 10 秒慢刷新、浏览器轮询间隔 0.2s→0.5s、参考资料展开提前退出、调试快照默认受 `DOUBAO_DEBUG` 控制。
 - 应用内检查更新：新增 `update_checker.py` 封装 GitHub Releases API，支持语义化版本比较、单文件/便携版 asset 匹配；API 被限流时退化为读取 `/releases/latest` 的 302 跳转地址，并进一步通过 Release 页面 HTML 解析 release notes、asset 真实链接和发布时间。Native Dashboard 新增“检查更新”页签，支持启动时自动检查、手动检查、显示 Release notes、打开 Release 下载页面。
 - 应用内下载更新（Task 4）：检查更新页签支持分别下载“单文件版”和“便携版”，带进度条，下载完成后做 SHA256 或完整性兜底校验，并显示本地文件路径；更新信息本地缓存，同版本重复打开时直接读取本地文案。
-- 豆包新布局兼容：优化 `embedded_browser_client.py` 登录状态检测，增加用户头像/菜单、退出登录等正向信号，避免全页扫描 `div` 导致新布局账号超时误判为“未登入”。
+- 多平台采集架构：新增 `platforms/` 包，抽象 `AIPlatform` 配置；已接入豆包、DeepSeek；账号与任务均绑定 AI 平台，调度器按平台过滤。
+- 桌面端与命令行端浏览器客户端全面平台化，统一从 `AIPlatform` 读取 URL、选择器、Cookie 域名、API 捕获模式。
+- 导出 Excel 增加“AI 平台”列。
 - 应用内自动更新安装（Task 5）：实现 Windows 自替换 updater；便携版整体目录替换、单文件版 exe 替换；独立 `update_installer_helper.exe` 等待原进程退出后执行替换；旧版本保留为 `.bak` 以便手动回滚。
 
 ---
@@ -156,8 +165,9 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 | 需求 | 修改位置 |
 |------|----------|
+| 新增/修改 AI 平台 | `src/doubao2api/platforms/` |
 | 新增/修改平台或类型 | `src/doubao2api/research_platforms.py` 或平台信息页导入 |
-| 豆包页面结构变了 | `src/doubao2api/selectors.py` |
+| 豆包/DeepSeek 页面结构变化 | `src/doubao2api/platforms/doubao.py` / `src/doubao2api/platforms/deepseek.py` |
 | 新增桌面 UI 页签 | `src/doubao2api/native_dashboard.py` |
 | 新增后台 API | `src/doubao2api/server.py` + `models.py` |
 | 新增 Web UI 页面 | `src/doubao2api/static/index.html` |
@@ -170,7 +180,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 ## 12. 重要约束
 
-- 与字节跳动/豆包无官方关系。
+- 与字节跳动/豆包、DeepSeek 无官方关系。
 - 不绕过验证码；检测到验证码/风控会暂停账号 30 分钟等待人工处理。
 - 所有账号数据、Cookie、数据库保存在本地。
 - 桌面模式依赖 PySide6 可选依赖；服务端模式不需要 GUI。
