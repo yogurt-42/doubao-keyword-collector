@@ -177,7 +177,9 @@ class ResearchResultsLongTailRequest(BaseModel):
     job_id: str = ""
     keywords: list[str] = Field(default_factory=list)
     platform: str = ""
+    platforms: list[str] = Field(default_factory=list)
     account_id: str = ""
+    account_ids: list[str] = Field(default_factory=list)
     date_from: str = ""
     date_to: str = ""
     split_mode: str = "threshold"

@@ -1373,25 +1373,41 @@ class NativeDashboard(QWidget):
         layout.addWidget(intro)
 
         scope = QGroupBox("分析范围")
-        scope_layout = QGridLayout(scope)
-        scope_layout.setHorizontalSpacing(12)
-        scope_layout.setVerticalSpacing(8)
+        scope_layout = QVBoxLayout(scope)
+        scope_layout.setSpacing(10)
 
+        filters_row = QHBoxLayout()
+        filters_row.setSpacing(10)
+
+        job_box = QVBoxLayout()
+        job_box.setSpacing(4)
+        job_box.setContentsMargins(0, 0, 0, 0)
         self.long_tail_job = QComboBox()
         self.long_tail_job.addItem("全部任务", "")
-        scope_layout.addWidget(QLabel("任务"), 0, 0)
-        scope_layout.addWidget(self.long_tail_job, 0, 1)
+        job_box.addWidget(QLabel("任务"))
+        job_box.addWidget(self.long_tail_job)
+        filters_row.addLayout(job_box, 3)
 
-        self.long_tail_platform = QComboBox()
-        self.long_tail_platform.addItem("全部平台", "")
-        scope_layout.addWidget(QLabel("平台"), 0, 2)
-        scope_layout.addWidget(self.long_tail_platform, 0, 3)
+        platform_box = QVBoxLayout()
+        platform_box.setSpacing(4)
+        platform_box.setContentsMargins(0, 0, 0, 0)
+        self.long_tail_platform = MultiSelectFilter("全部平台")
+        platform_box.addWidget(QLabel("平台"))
+        platform_box.addWidget(self.long_tail_platform)
+        filters_row.addLayout(platform_box, 1)
 
-        self.long_tail_account = QComboBox()
-        self.long_tail_account.addItem("全部账号", "")
-        scope_layout.addWidget(QLabel("账号"), 0, 4)
-        scope_layout.addWidget(self.long_tail_account, 0, 5)
+        account_box = QVBoxLayout()
+        account_box.setSpacing(4)
+        account_box.setContentsMargins(0, 0, 0, 0)
+        self.long_tail_account = MultiSelectFilter("全部账号")
+        account_box.addWidget(QLabel("账号"))
+        account_box.addWidget(self.long_tail_account)
+        filters_row.addLayout(account_box, 1)
 
+        scope_layout.addLayout(filters_row)
+
+        date_row = QHBoxLayout()
+        date_row.setSpacing(10)
         self.long_tail_date_enabled = QCheckBox("启用日期筛选")
         self.long_tail_date_from = QDateEdit(QDate.currentDate().addDays(-30))
         self.long_tail_date_to = QDateEdit(QDate.currentDate())
@@ -1399,11 +1415,13 @@ class NativeDashboard(QWidget):
             editor.setCalendarPopup(True)
             editor.setDisplayFormat("yyyy-MM-dd")
             editor.setMinimumWidth(120)
-        scope_layout.addWidget(self.long_tail_date_enabled, 1, 0)
-        scope_layout.addWidget(self.long_tail_date_from, 1, 1)
-        scope_layout.addWidget(QLabel("至"), 1, 2)
-        scope_layout.addWidget(self.long_tail_date_to, 1, 3)
-        scope_layout.setColumnStretch(5, 1)
+        date_row.addWidget(self.long_tail_date_enabled)
+        date_row.addWidget(self.long_tail_date_from)
+        date_row.addWidget(QLabel("至"))
+        date_row.addWidget(self.long_tail_date_to)
+        date_row.addStretch()
+        scope_layout.addLayout(date_row)
+
         layout.addWidget(scope)
 
         params_group = QGroupBox("分类阈值")
@@ -1414,20 +1432,30 @@ class NativeDashboard(QWidget):
         self.long_tail_split_mode = QComboBox()
         self.long_tail_split_mode.addItem("业务阈值", "threshold")
         self.long_tail_split_mode.addItem("中位数", "median")
+        self.long_tail_split_mode.setToolTip(
+            "业务阈值：按下方手动设置的数字划分；\n"
+            "中位数：按数据自动计算中间值划分，适合不确定阈值时尝试。"
+        )
         params_layout.addWidget(QLabel("分割"), 0, 0)
         params_layout.addWidget(self.long_tail_split_mode, 0, 1)
 
         self.long_tail_breadth_threshold = QSpinBox()
         self.long_tail_breadth_threshold.setRange(1, 9999)
         self.long_tail_breadth_threshold.setValue(3)
-        self.long_tail_breadth_threshold.setToolTip("高广度的判定阈值")
+        self.long_tail_breadth_threshold.setToolTip(
+            "广度 = 该平台覆盖了多少个不同关键词。\n"
+            "调大：只保留覆盖关键词更多的平台；调小：纳入更小众的平台。"
+        )
         params_layout.addWidget(QLabel("广度≥"), 0, 2)
         params_layout.addWidget(self.long_tail_breadth_threshold, 0, 3)
 
         self.long_tail_freq_threshold = QSpinBox()
         self.long_tail_freq_threshold.setRange(1, 99999)
         self.long_tail_freq_threshold.setValue(20)
-        self.long_tail_freq_threshold.setToolTip("低频次的判定阈值")
+        self.long_tail_freq_threshold.setToolTip(
+            "频次 = 该平台在所有回答中被引用的总次数。\n"
+            "调小：纳入被引用次数更少的平台；调大：只看被频繁引用的平台。"
+        )
         params_layout.addWidget(QLabel("频次≤"), 0, 4)
         params_layout.addWidget(self.long_tail_freq_threshold, 0, 5)
 
@@ -1436,7 +1464,10 @@ class NativeDashboard(QWidget):
         self.long_tail_density_threshold.setValue(5.0)
         self.long_tail_density_threshold.setDecimals(1)
         self.long_tail_density_threshold.setSingleStep(0.5)
-        self.long_tail_density_threshold.setToolTip("目标长尾的最大密度")
+        self.long_tail_density_threshold.setToolTip(
+            "密度 = 频次 ÷ 广度，即每个关键词平均被该平台引用几次。\n"
+            "优质长尾通常密度低：覆盖广、但每个关键词引用次数不多。"
+        )
         params_layout.addWidget(QLabel("密度≤"), 1, 0)
         params_layout.addWidget(self.long_tail_density_threshold, 1, 1)
 
@@ -1445,15 +1476,24 @@ class NativeDashboard(QWidget):
         self.long_tail_noise_density.setValue(20.0)
         self.long_tail_noise_density.setDecimals(1)
         self.long_tail_noise_density.setSingleStep(0.5)
-        self.long_tail_noise_density.setToolTip("虚假长尾的最小密度")
+        self.long_tail_noise_density.setToolTip(
+            "噪声 = 密度极高的平台，通常是通用大站刷量。\n"
+            "超过此密度的平台会被排除，避免它们挤占长尾推荐位。"
+        )
         params_layout.addWidget(QLabel("虚假密度≥"), 1, 2)
         params_layout.addWidget(self.long_tail_noise_density, 1, 3)
 
         self.long_tail_log_scale = QCheckBox("Y 轴对数")
         self.long_tail_log_scale.setChecked(True)
+        self.long_tail_log_scale.setToolTip(
+            "对数坐标让数值差距很大的平台也能在同一张图里看清分布。"
+        )
         params_layout.addWidget(self.long_tail_log_scale, 1, 4)
 
         self.long_tail_x_log_scale = QCheckBox("X 轴对数")
+        self.long_tail_x_log_scale.setToolTip(
+            "对数坐标让数值差距很大的平台也能在同一张图里看清分布。"
+        )
         params_layout.addWidget(self.long_tail_x_log_scale, 1, 5)
 
         analyze_button = QPushButton("分析长尾信源")
@@ -1461,6 +1501,19 @@ class NativeDashboard(QWidget):
         analyze_button.clicked.connect(self.analyze_long_tail)
         params_layout.addWidget(analyze_button, 1, 6)
         params_layout.setColumnStretch(6, 1)
+
+        params_hint = QLabel(
+            "参数说明：广度 = 平台覆盖的关键词个数；"
+            "频次 = 平台被引用的总次数；密度 = 频次 ÷ 广度。\n"
+            "长尾信源的特点往往是：广度较高、频次较低、密度较低。\n"
+            "密度 ≤ 密度阈值 的平台会被识别为“垂直长尾宝藏”；"
+            "密度 ≥ 虚假密度阈值 的平台会被当作通用大站噪声剔除；"
+            "介于两者之间的为普通垂直信源。"
+        )
+        params_hint.setObjectName("muted")
+        params_hint.setWordWrap(True)
+        params_layout.addWidget(params_hint, 2, 0, 1, 7)
+
         layout.addWidget(params_group)
 
         actions = QHBoxLayout()
@@ -2956,19 +3009,11 @@ class NativeDashboard(QWidget):
             jobs, platforms, accounts = payload
             self._update_combo(
                 self.long_tail_job,
-                [(f"{job['name']}（{job['result_count']}）", job["id"]) for job in jobs],
+                [(f"{job['name']}（{job['keyword_count']}）", job["id"]) for job in jobs],
                 "全部任务",
             )
-            self._update_combo(
-                self.long_tail_platform,
-                [(value, value) for value in platforms],
-                "全部平台",
-            )
-            self._update_combo(
-                self.long_tail_account,
-                [(value, value) for value in accounts],
-                "全部账号",
-            )
+            self.long_tail_platform.set_options([(value, value) for value in platforms])
+            self.long_tail_account.set_options([(value, value) for value in accounts])
 
         self._watch(future, apply, label="刷新长尾选项", silent=True)
 
@@ -3741,7 +3786,7 @@ class NativeDashboard(QWidget):
 
             self._update_combo(
                 self.result_job,
-                [(f"{job['name']}（{job['result_count']}）", job["id"]) for job in jobs],
+                [(f"{job['name']}（{job['keyword_count']}）", job["id"]) for job in jobs],
                 "全部任务",
             )
             self._update_combo(
@@ -4186,8 +4231,8 @@ class NativeDashboard(QWidget):
             return
         self.analyzing_long_tail = True
         job_id = str(self.long_tail_job.currentData() or "")
-        platform = str(self.long_tail_platform.currentData() or "")
-        account_id = str(self.long_tail_account.currentData() or "")
+        platforms = self.long_tail_platform.selected_values()
+        account_ids = self.long_tail_account.selected_values()
         date_from = ""
         date_to = ""
         if self.long_tail_date_enabled.isChecked():
@@ -4205,8 +4250,8 @@ class NativeDashboard(QWidget):
             return self.backend.research_store.long_tail_analysis(
                 job_id=job_id,
                 keyword="",
-                platform=platform,
-                account_id=account_id,
+                platforms=platforms,
+                account_ids=account_ids,
                 date_from=date_from,
                 date_to=date_to,
                 split_mode=split_mode,

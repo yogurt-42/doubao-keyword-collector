@@ -311,10 +311,10 @@
       <div class="panel">
         <h2>长尾信源分析</h2>
         <p class="hint">按频次、广度、密度识别垂直长尾宝藏平台。气泡大小代表密度，颜色代表象限分类。</p>
-        <div class="row three">
-          <div><label for="ltJob">任务</label><select id="ltJob"><option value="">全部任务</option></select></div>
-          <div><label for="ltAccount">账号</label><select id="ltAccount"><option value="">全部账号</option></select></div>
-          <div><label for="ltPlatform">平台</label><input id="ltPlatform" placeholder="可选，输入平台域名"></div>
+        <div class="row" style="gap:12px;align-items:flex-end">
+          <div style="flex:3"><label for="ltJob">任务</label><select id="ltJob"><option value="">全部任务</option></select></div>
+          <div style="flex:1"><label for="ltAccount">账号</label><select id="ltAccount" multiple size="4"><option value="">全部账号</option></select></div>
+          <div style="flex:1"><label for="ltPlatform">平台</label><select id="ltPlatform" multiple size="4"><option value="">全部平台</option></select></div>
         </div>
         <div class="row three" style="margin-top:12px">
           <div><label for="ltDateFrom">开始日期</label><input id="ltDateFrom" type="date"></div>
@@ -322,11 +322,16 @@
           <div><label for="ltSplitMode">分类方式</label><select id="ltSplitMode"><option value="threshold">阈值</option><option value="median">中位数</option></select></div>
         </div>
         <div class="row four" style="margin-top:12px">
-          <div><label for="ltBreadth">广度阈值</label><input id="ltBreadth" type="number" value="3" min="1"></div>
-          <div><label for="ltFreq">频次阈值</label><input id="ltFreq" type="number" value="20" min="1"></div>
-          <div><label for="ltDensity">密度阈值</label><input id="ltDensity" type="number" value="5" step="0.1"></div>
-          <div><label for="ltNoise">噪声密度阈值</label><input id="ltNoise" type="number" value="20" step="0.1"></div>
+          <div><label for="ltBreadth">广度阈值</label><input id="ltBreadth" type="number" value="3" min="1" title="广度 = 平台覆盖的关键词个数。调大只保留覆盖更广的平台，调小纳入更小众平台。"></div>
+          <div><label for="ltFreq">频次阈值</label><input id="ltFreq" type="number" value="20" min="1" title="频次 = 平台被引用的总次数。调小纳入引用次数更少的平台，调大只看热门平台。"></div>
+          <div><label for="ltDensity">密度阈值</label><input id="ltDensity" type="number" value="5" step="0.1" title="密度 = 频次 ÷ 广度。优质长尾通常密度低：覆盖广但每个关键词引用次数不多。"></div>
+          <div><label for="ltNoise">噪声密度阈值</label><input id="ltNoise" type="number" value="20" step="0.1" title="超过此密度的平台会被当作通用大站噪声剔除，避免挤占长尾推荐位。"></div>
         </div>
+        <p class="hint" style="margin-top:10px">
+          参数说明：广度 = 平台覆盖的关键词个数；频次 = 平台被引用的总次数；密度 = 频次 ÷ 广度。<br>
+          长尾信源的特点往往是：广度较高、频次较低、密度较低。<br>
+          密度 ≤ 密度阈值 的平台会被识别为“垂直长尾宝藏”；密度 ≥ 虚假密度阈值 的平台会被当作通用大站噪声剔除；介于两者之间的为普通垂直信源。
+        </p>
         <div class="actions" style="margin-top:14px">
           <button class="btn primary" id="analyzeLongTail">分析</button>
           <button class="btn" id="exportLongTail">导出 Excel</button>
@@ -831,15 +836,16 @@
       try {
         const data = await api('/admin/api/research/results?limit=1');
         preserveSelect('ltJob', data.jobs || [], 'id', 'name', '全部任务');
-        preserveSelect('ltAccount', data.accounts || [], null, null, '全部账号');
+        preserveMultiSelect('ltAccount', data.accounts || [], null, null, null, '全部账号');
+        preserveMultiSelect('ltPlatform', data.platforms || [], null, null, null, '全部平台');
       } catch (error) { toast(error.message, true); }
     }
 
     function longTailParams() {
       return {
         job_id: $('ltJob').value,
-        account_id: $('ltAccount').value,
-        platform: $('ltPlatform').value.trim(),
+        account_ids: [...$('ltAccount').selectedOptions].map(option => option.value).filter(Boolean),
+        platforms: [...$('ltPlatform').selectedOptions].map(option => option.value).filter(Boolean),
         date_from: $('ltDateFrom').value,
         date_to: $('ltDateTo').value,
         split_mode: $('ltSplitMode').value,
@@ -958,10 +964,10 @@
       } catch (error) { toast(error.message, true); }
     }
 
-    function preserveMultiSelect(id, values, valueKey, labelKey, countKey) {
+    function preserveMultiSelect(id, values, valueKey, labelKey, countKey, defaultLabel = '选择任务') {
       const select = $(id);
       const selected = new Set([...select.selectedOptions].map(option => option.value));
-      select.innerHTML = '<option value="" disabled>选择任务</option>';
+      select.innerHTML = `<option value="">${defaultLabel}</option>`;
       for (const item of values) {
         const value = valueKey ? item[valueKey] : item;
         let label = valueKey ? (item[labelKey] || value) : item;

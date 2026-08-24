@@ -1149,7 +1149,9 @@ class ResearchStore:
         job_ids: list[str] | None = None,
         keyword: str | list[str] = "",
         platform: str = "",
+        platforms: list[str] | None = None,
         account_id: str = "",
+        account_ids: list[str] | None = None,
         date_from: str = "",
         date_to: str = "",
     ) -> tuple[str, list[Any]]:
@@ -1173,10 +1175,26 @@ class ResearchStore:
         elif keyword:
             conditions.append("r.keyword LIKE ?")
             params.append(f"%{keyword}%")
-        if platform:
+        if platforms is not None:
+            platform_values = list(
+                dict.fromkeys(value.strip() for value in platforms if value.strip())
+            )
+            if platform_values:
+                placeholders = ", ".join("?" for _ in platform_values)
+                conditions.append(f"r.platform IN ({placeholders})")
+                params.extend(platform_values)
+        elif platform:
             conditions.append("r.platform = ?")
             params.append(platform)
-        if account_id:
+        if account_ids is not None:
+            account_values = list(
+                dict.fromkeys(value.strip() for value in account_ids if value.strip())
+            )
+            if account_values:
+                placeholders = ", ".join("?" for _ in account_values)
+                conditions.append(f"r.account_id IN ({placeholders})")
+                params.extend(account_values)
+        elif account_id:
             conditions.append("r.account_id = ?")
             params.append(account_id)
         if date_from:
@@ -1297,7 +1315,9 @@ class ResearchStore:
         job_id: str = "",
         keyword: str | list[str] = "",
         platform: str = "",
+        platforms: list[str] | None = None,
         account_id: str = "",
+        account_ids: list[str] | None = None,
         date_from: str = "",
         date_to: str = "",
         split_mode: str = "threshold",
@@ -1316,7 +1336,9 @@ class ResearchStore:
             job_id=job_id,
             keyword=keyword,
             platform=platform,
+            platforms=platforms,
             account_id=account_id,
+            account_ids=account_ids,
             date_from=date_from,
             date_to=date_to,
         )
