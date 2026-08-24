@@ -1,6 +1,57 @@
+from datetime import datetime
 from pathlib import Path
 
 from doubao2api.research_store import ResearchStore
+
+
+def _today_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def test_job_name_generation(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "names.sqlite3")
+
+    auto_named = store.create_job(
+        name="",
+        keywords=["附近美食", "北京景点"],
+        account_ids=[],
+        prompt_template="{keyword}",
+        scheduled_at=None,
+        interval_seconds=5,
+        account_cooldown_seconds=0,
+        max_attempts=1,
+    )
+    assert auto_named["name"] == f"附近美食-豆包-{_today_str()}"
+
+    custom_named = store.create_job(
+        name="品牌调研",
+        keywords=["新能源汽车"],
+        account_ids=[],
+        prompt_template="{keyword}",
+        scheduled_at=None,
+        interval_seconds=5,
+        account_cooldown_seconds=0,
+        max_attempts=1,
+        ai_platform="deepseek",
+    )
+    assert custom_named["name"] == f"品牌调研-DeepSeek-{_today_str()}"
+
+
+def test_result_jobs_returns_keyword_count(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "result_jobs.sqlite3")
+    store.create_job(
+        name="计数测试",
+        keywords=["A", "B", "C"],
+        account_ids=[],
+        prompt_template="{keyword}",
+        scheduled_at=None,
+        interval_seconds=5,
+        account_cooldown_seconds=0,
+        max_attempts=1,
+    )
+    result_jobs = store.result_jobs()
+    assert len(result_jobs) == 1
+    assert result_jobs[0]["keyword_count"] == 3
 
 
 def test_job_and_results_lifecycle(tmp_path: Path) -> None:
@@ -38,7 +89,7 @@ def test_job_and_results_lifecycle(tmp_path: Path) -> None:
         item=live_link,
         account_id="account-1",
     )
-    assert store.list_results(job_id=job["id"])[0]["job_name"] == "测试"
+    assert store.list_results(job_id=job["id"])[0]["job_name"] == job["name"]
     store.complete_task(
         due[0]["id"],
         answer="",
@@ -96,7 +147,7 @@ def test_job_and_results_lifecycle(tmp_path: Path) -> None:
     assert store.list_results()[0]["account_id"] == "account-renamed"
     store.remove_account_references("account-renamed")
     assert store.get_job(job["id"])["account_ids"] == []
-    assert store.result_jobs() == [{"id": job["id"], "name": "测试", "result_count": 1}]
+    assert store.result_jobs() == [{"id": job["id"], "name": job["name"], "keyword_count": 2}]
     store.delete_job(job["id"])
     assert store.list_jobs() == []
     assert store.list_results() == []

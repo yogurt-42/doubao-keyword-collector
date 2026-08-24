@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .platforms import get_platform
 from .research_links import platform_for_reference
 from .research_platforms import category_for_url, platform_category
 
@@ -21,6 +22,13 @@ def local_now() -> datetime:
 
 def iso_now() -> str:
     return local_now().isoformat(timespec="seconds")
+
+
+def _build_job_name(name: str, keywords: list[str], ai_platform: str, created_at: str) -> str:
+    """Generate a job name like ``{prefix}-{platform}-{date}``."""
+    prefix = name.strip() or (keywords[0].strip() if keywords else "未命名")
+    platform_name = get_platform(ai_platform).name
+    return f"{prefix}-{platform_name}-{created_at[:10]}"
 
 
 def normalize_datetime(value: str | None) -> str:
@@ -291,7 +299,7 @@ class ResearchStore:
                 """,
                 (
                     job_id,
-                    name.strip() or f"关键词采集 {created_at[:10]}",
+                    _build_job_name(name, keywords, ai_platform, created_at),
                     prompt_template,
                     first_due.isoformat(timespec="seconds"),
                     interval_seconds,
@@ -1466,11 +1474,11 @@ class ResearchStore:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT j.id, j.name, COUNT(r.id) AS result_count
+                SELECT j.id, j.name, COUNT(DISTINCT t.keyword) AS keyword_count
                 FROM research_jobs j
-                JOIN research_results r ON r.job_id = j.id
+                LEFT JOIN research_tasks t ON t.job_id = j.id
                 GROUP BY j.id, j.name
-                ORDER BY MAX(r.collected_at) DESC
+                ORDER BY MAX(j.created_at) DESC
                 """
             ).fetchall()
         return [dict(row) for row in rows]

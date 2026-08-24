@@ -123,6 +123,7 @@ def _create_job_with_result(
 def test_import_create_and_export(tmp_path: Path) -> None:
     with make_client(tmp_path) as client:
         job_id, _ = _create_job_with_result(client)
+        job_name = client.get(f"/admin/api/research/jobs/{job_id}").json()["name"]
 
         exported = client.get("/admin/api/research/results/export.xlsx")
         assert exported.status_code == 200
@@ -141,7 +142,7 @@ def test_import_create_and_export(tmp_path: Path) -> None:
         )
         assert rows[1][4] == "报告"
         assert rows[1][:7] == (
-            "测试任务",
+            job_name,
             rows[1][1],
             "新能源汽车",
             "doubao",

@@ -108,7 +108,13 @@ class PendingOperation:
 
 
 class MultiSelectFilter(QWidget):
-    def __init__(self, default_text: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        default_text: str,
+        parent: QWidget | None = None,
+        *,
+        button_width: int = 190,
+    ) -> None:
         super().__init__(parent)
         self.default_text = default_text
         self._updating = False
@@ -119,13 +125,13 @@ class MultiSelectFilter(QWidget):
         self.button.setObjectName("filterButton")
         self.button.setText(default_text)
         self.button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.button.setMinimumWidth(190)
+        self.button.setMinimumWidth(button_width)
         self.button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout.addWidget(self.button)
 
         self.menu = QMenu(self)
         self.menu.setObjectName("filterMenu")
-        self.menu.setMinimumWidth(310)
+        self.menu.aboutToShow.connect(self._resize_menu)
         self.button.setMenu(self.menu)
 
         search_action = QWidgetAction(self.menu)
@@ -161,6 +167,9 @@ class MultiSelectFilter(QWidget):
         self.list_widget.itemChanged.connect(self._sync_label)
         select_all.clicked.connect(self.select_all)
         clear.clicked.connect(self.clear_selection)
+
+    def _resize_menu(self) -> None:
+        self.menu.setMinimumWidth(self.width())
 
     def set_options(self, values: list[str] | list[tuple[str, str]]) -> None:
         normalized: list[tuple[str, str]] = []
@@ -1068,7 +1077,7 @@ class NativeDashboard(QWidget):
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("任务名称"))
         self.job_name = QLineEdit()
-        self.job_name.setPlaceholderText("例如：7 月品牌词调研")
+        self.job_name.setPlaceholderText("留空将自动生成：首个关键词-平台-日期")
         name_row.addWidget(self.job_name, 1)
         name_row.addWidget(QLabel("AI 平台"))
         self.job_platform = QComboBox()
@@ -1550,7 +1559,7 @@ class NativeDashboard(QWidget):
         group_a.setObjectName("compareCard")
         group_a_layout = QHBoxLayout(group_a)
         group_a_layout.addWidget(QLabel("A 任务群"))
-        self.compare_jobs_a = MultiSelectFilter("选择任务")
+        self.compare_jobs_a = MultiSelectFilter("选择任务", button_width=310)
         group_a_layout.addWidget(self.compare_jobs_a, 1)
         groups.addWidget(group_a, 1)
 
@@ -1558,7 +1567,7 @@ class NativeDashboard(QWidget):
         group_b.setObjectName("compareCard")
         group_b_layout = QHBoxLayout(group_b)
         group_b_layout.addWidget(QLabel("B 任务群"))
-        self.compare_jobs_b = MultiSelectFilter("选择任务")
+        self.compare_jobs_b = MultiSelectFilter("选择任务", button_width=310)
         group_b_layout.addWidget(self.compare_jobs_b, 1)
         groups.addWidget(group_b, 1)
         compare_button = QPushButton("分析信源变化")
@@ -3929,7 +3938,9 @@ class NativeDashboard(QWidget):
             self.refreshing_comparison = False
             result, jobs, accounts, keyword_options = payload
 
-            job_options = [(f"{job['name']}（{job['result_count']}）", job["id"]) for job in jobs]
+            job_options = [
+                (f"{job['name']}（{job['keyword_count']} 个关键词）", job["id"]) for job in jobs
+            ]
             self.compare_jobs_a.set_options(job_options)
             self.compare_jobs_b.set_options(job_options)
 

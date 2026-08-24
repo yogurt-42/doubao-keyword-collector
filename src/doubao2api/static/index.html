@@ -179,7 +179,7 @@
             <h2>创建关键词任务</h2>
             <p class="hint">每行一个关键词，也可以导入 Excel/CSV。系统只保存豆包思考过程中的参考资料链接和平台。</p>
             <div class="row">
-              <div><label for="jobName">任务名称（可选）</label><input id="jobName" placeholder="例如：7 月品牌词调研"></div>
+              <div><label for="jobName">任务名称（可选）</label><input id="jobName" placeholder="留空将自动生成：首个关键词-平台-日期"></div>
               <div><label for="scheduleAt">开始时间（留空立即开始）</label><input id="scheduleAt" type="datetime-local"></div>
             </div>
             <label for="keywords">关键词</label>
@@ -952,19 +952,23 @@
     async function loadComparisonOptions() {
       try {
         const data = await api('/admin/api/research/results?limit=1');
-        preserveMultiSelect('cmpJobsA', data.jobs || [], 'id', 'name');
-        preserveMultiSelect('cmpJobsB', data.jobs || [], 'id', 'name');
+        preserveMultiSelect('cmpJobsA', data.jobs || [], 'id', 'name', 'keyword_count');
+        preserveMultiSelect('cmpJobsB', data.jobs || [], 'id', 'name', 'keyword_count');
         preserveSelect('cmpAccount', data.accounts || [], null, null, '全部账号');
       } catch (error) { toast(error.message, true); }
     }
 
-    function preserveMultiSelect(id, values, valueKey, labelKey) {
+    function preserveMultiSelect(id, values, valueKey, labelKey, countKey) {
       const select = $(id);
       const selected = new Set([...select.selectedOptions].map(option => option.value));
       select.innerHTML = '<option value="" disabled>选择任务</option>';
       for (const item of values) {
         const value = valueKey ? item[valueKey] : item;
-        const label = valueKey ? (item[labelKey] || value) : item;
+        let label = valueKey ? (item[labelKey] || value) : item;
+        const count = countKey ? item[countKey] : null;
+        if (count !== undefined && count !== null) {
+          label += `（${count} 个关键词）`;
+        }
         const option = document.createElement('option');
         option.value = value;
         option.textContent = label;
