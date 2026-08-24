@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import hashlib
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -19,9 +20,11 @@ from PySide6.QtCore import (
     QStandardPaths,
     Qt,
     QTimer,
+    QtMsgType,
     QUrl,
     Signal,
     Slot,
+    qInstallMessageHandler,
 )
 from PySide6.QtNetwork import QNetworkCookie
 from PySide6.QtWebEngineCore import (
@@ -42,6 +45,22 @@ from PySide6.QtWidgets import (
 
 from .config import RuntimeConfig
 from .native_dashboard import DesktopBackend, NativeDashboard
+
+
+def _qt_message_handler(mode: QtMsgType, context: Any, message: str) -> None:
+    """Filter out non-functional noise from Qt/Chromium stderr output."""
+    noise_patterns = (
+        "stun.l.google.com",
+        "upgrade-insecure-requests",
+        "was preloaded using link preload but not used",
+        "QFont::setPointSize",
+        "CORS policy",
+        "XMLHttpRequest",
+    )
+    if any(pattern in message for pattern in noise_patterns):
+        return
+    prefix = {QtMsgType.QtDebugMsg: "Qt Debug"}.get(mode, "Qt")
+    print(f"{prefix}: {message}", file=sys.stderr)
 
 
 def _finish(
@@ -744,6 +763,7 @@ class DesktopWindow(QMainWindow):
 
 def run_desktop(runtime: RuntimeConfig | None = None) -> None:
     runtime_config = runtime or RuntimeConfig.from_env()
+    qInstallMessageHandler(_qt_message_handler)
     QCoreApplication.setAttribute(
         Qt.ApplicationAttribute.AA_ShareOpenGLContexts,
         True,

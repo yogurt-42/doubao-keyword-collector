@@ -159,14 +159,14 @@ class BrowserAccountPool:
         config = self.account_browser_config(normalized)
         platform = config.get("ai_platform", "")
         if platform:
-            LOGGER.info("Account %s platform from config: %s", normalized, platform)
+            LOGGER.debug("Account %s platform from config: %s", normalized, platform)
             return platform
         platform = self.store.settings.account_platforms.get(normalized, "")
         if platform:
-            LOGGER.info("Account %s platform from settings: %s", normalized, platform)
+            LOGGER.debug("Account %s platform from settings: %s", normalized, platform)
             return platform
         platform = self.store.settings.default_ai_platform or DEFAULT_PLATFORM_KEY
-        LOGGER.info("Account %s platform fallback: %s", normalized, platform)
+        LOGGER.debug("Account %s platform fallback: %s", normalized, platform)
         return platform
 
     def set_account_platform(self, account_id: str, platform: str) -> None:

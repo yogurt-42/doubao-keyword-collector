@@ -108,16 +108,21 @@ class PendingOperation:
 
 
 class MultiSelectFilter(QWidget):
+    selection_changed = Signal()
+
     def __init__(
         self,
         default_text: str,
         parent: QWidget | None = None,
         *,
         button_width: int = 190,
+        selection_unit: str = "关键词",
     ) -> None:
         super().__init__(parent)
         self.default_text = default_text
+        self.selection_unit = selection_unit
         self._updating = False
+        self._programmatic_update = False
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -136,7 +141,7 @@ class MultiSelectFilter(QWidget):
 
         search_action = QWidgetAction(self.menu)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("搜索关键词")
+        self.search.setPlaceholderText(f"搜索{self.selection_unit}")
         self.search.setClearButtonEnabled(True)
         search_action.setDefaultWidget(self.search)
         self.menu.addAction(search_action)
@@ -172,35 +177,40 @@ class MultiSelectFilter(QWidget):
         self.menu.setMinimumWidth(self.width())
 
     def set_options(self, values: list[str] | list[tuple[str, str]]) -> None:
-        normalized: list[tuple[str, str]] = []
-        for value in values:
-            if isinstance(value, tuple):
-                normalized.append(value)
-            else:
-                normalized.append((value, value))
-        current = [
-            (
-                self.list_widget.item(index).text(),
-                str(self.list_widget.item(index).data(Qt.ItemDataRole.UserRole)),
-            )
-            for index in range(self.list_widget.count())
-        ]
-        if current == normalized:
-            return
-        selected = set(self.selected_values())
-        self._updating = True
-        self.list_widget.clear()
-        for display, value in normalized:
-            item = QListWidgetItem(display)
-            item.setData(Qt.ItemDataRole.UserRole, value)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(
-                Qt.CheckState.Checked if value in selected else Qt.CheckState.Unchecked
-            )
-            self.list_widget.addItem(item)
-        self._updating = False
-        self._filter_items(self.search.text())
-        self._sync_label()
+        self._programmatic_update = True
+        try:
+            normalized: list[tuple[str, str]] = []
+            for value in values:
+                if isinstance(value, tuple):
+                    normalized.append(value)
+                else:
+                    normalized.append((value, value))
+            current = [
+                (
+                    self.list_widget.item(index).text(),
+                    str(self.list_widget.item(index).data(Qt.ItemDataRole.UserRole)),
+                )
+                for index in range(self.list_widget.count())
+            ]
+            if current == normalized:
+                self._sync_label()
+                return
+            selected = set(self.selected_values())
+            self._updating = True
+            self.list_widget.clear()
+            for display, value in normalized:
+                item = QListWidgetItem(display)
+                item.setData(Qt.ItemDataRole.UserRole, value)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked if value in selected else Qt.CheckState.Unchecked
+                )
+                self.list_widget.addItem(item)
+            self._updating = False
+            self._filter_items(self.search.text())
+            self._sync_label()
+        finally:
+            self._programmatic_update = False
 
     def selected_values(self) -> list[str]:
         return [
@@ -243,9 +253,11 @@ class MultiSelectFilter(QWidget):
         elif len(selected) == 1:
             text = selected[0]
         else:
-            text = f"已选 {len(selected)} 个关键词"
+            text = f"已选 {len(selected)} 个{self.selection_unit}"
         self.button.setText(text)
         self.button.setToolTip("\n".join(selected))
+        if not self._programmatic_update:
+            self.selection_changed.emit()
 
 
 class DateRangeCalendar(QCalendarWidget):
@@ -1131,6 +1143,22 @@ class NativeDashboard(QWidget):
         template_row.addWidget(template_hint)
         form.addLayout(template_row)
 
+        account_row = QHBoxLayout()
+        account_row.setSpacing(10)
+        account_row.addWidget(QLabel("账号平台"))
+        self.job_account_platform = QComboBox()
+        self.job_account_platform.addItem("全部平台", "")
+        for platform in list_platforms():
+            self.job_account_platform.addItem(platform.name, platform.key)
+        self.job_account_platform.currentIndexChanged.connect(self._apply_job_account_platform)
+        account_row.addWidget(self.job_account_platform)
+        account_row.addWidget(QLabel("使用账号"))
+        self.job_accounts = MultiSelectFilter("全部账号", selection_unit="账号")
+        self.job_accounts.setToolTip("不选则使用所有可用账号")
+        account_row.addWidget(self.job_accounts, 1)
+        account_row.addStretch()
+        form.addLayout(account_row)
+
         action_row = QHBoxLayout()
         immediate_hint = QLabel("任务异常会自动释放账号并按设置重试；已识别资料会即时落库")
         immediate_hint.setObjectName("muted")
@@ -1198,6 +1226,17 @@ class NativeDashboard(QWidget):
         controls_layout.addWidget(create_button)
         controls_layout.addWidget(refresh_button)
         layout.addWidget(controls)
+
+        filter_bar = QHBoxLayout()
+        filter_bar.setSpacing(10)
+        self.account_platform_filter = MultiSelectFilter("全部平台", selection_unit="平台")
+        self.account_platform_filter.setToolTip("按 AI 平台筛选显示的账号卡片")
+        self.account_platform_filter.selection_changed.connect(self.refresh_accounts)
+        filter_bar.addWidget(QLabel("平台筛选"))
+        filter_bar.addWidget(self.account_platform_filter, 1)
+        filter_bar.addStretch()
+        layout.addLayout(filter_bar)
+
         self.accounts_summary = QLabel("正在读取账号状态…")
         self.accounts_summary.setObjectName("muted")
         layout.addWidget(self.accounts_summary)
@@ -1391,7 +1430,7 @@ class NativeDashboard(QWidget):
         platform_box = QVBoxLayout()
         platform_box.setSpacing(4)
         platform_box.setContentsMargins(0, 0, 0, 0)
-        self.long_tail_platform = MultiSelectFilter("全部平台")
+        self.long_tail_platform = MultiSelectFilter("全部平台", selection_unit="平台")
         platform_box.addWidget(QLabel("平台"))
         platform_box.addWidget(self.long_tail_platform)
         filters_row.addLayout(platform_box, 1)
@@ -1399,7 +1438,7 @@ class NativeDashboard(QWidget):
         account_box = QVBoxLayout()
         account_box.setSpacing(4)
         account_box.setContentsMargins(0, 0, 0, 0)
-        self.long_tail_account = MultiSelectFilter("全部账号")
+        self.long_tail_account = MultiSelectFilter("全部账号", selection_unit="账号")
         account_box.addWidget(QLabel("账号"))
         account_box.addWidget(self.long_tail_account)
         filters_row.addLayout(account_box, 1)
@@ -1612,7 +1651,7 @@ class NativeDashboard(QWidget):
         group_a.setObjectName("compareCard")
         group_a_layout = QHBoxLayout(group_a)
         group_a_layout.addWidget(QLabel("A 任务群"))
-        self.compare_jobs_a = MultiSelectFilter("选择任务", button_width=310)
+        self.compare_jobs_a = MultiSelectFilter("选择任务", button_width=310, selection_unit="任务")
         group_a_layout.addWidget(self.compare_jobs_a, 1)
         groups.addWidget(group_a, 1)
 
@@ -1620,7 +1659,7 @@ class NativeDashboard(QWidget):
         group_b.setObjectName("compareCard")
         group_b_layout = QHBoxLayout(group_b)
         group_b_layout.addWidget(QLabel("B 任务群"))
-        self.compare_jobs_b = MultiSelectFilter("选择任务", button_width=310)
+        self.compare_jobs_b = MultiSelectFilter("选择任务", button_width=310, selection_unit="任务")
         group_b_layout.addWidget(self.compare_jobs_b, 1)
         groups.addWidget(group_b, 1)
         compare_button = QPushButton("分析信源变化")
@@ -2587,6 +2626,48 @@ class NativeDashboard(QWidget):
             layout.addWidget(delete)
         return card
 
+    def refresh_job_account_options(self) -> None:
+        future = self.backend.submit(self.backend.account_pool.snapshots())
+
+        def apply(rows: list[dict[str, Any]]) -> None:
+            self._job_account_snapshots = rows
+            current_platform = self.job_account_platform.currentData()
+            self.job_account_platform.clear()
+            self.job_account_platform.addItem("全部平台", "")
+            for platform in list_platforms():
+                self.job_account_platform.addItem(platform.name, platform.key)
+            if current_platform:
+                index = self.job_account_platform.findData(current_platform)
+                if index >= 0:
+                    self.job_account_platform.setCurrentIndex(index)
+            account_options = []
+            for row in rows:
+                account_id = row["account_id"]
+                platform_key = row.get("ai_platform", "doubao")
+                platform_name = get_platform(platform_key).name
+                display = f"{account_id} [{platform_name}]"
+                account_options.append((display, account_id))
+            self.job_accounts.set_options(account_options)
+            self._apply_job_account_platform()
+
+        self._watch(future, apply, label="刷新账号选项", silent=True)
+
+    def _apply_job_account_platform(self) -> None:
+        platform_key = self.job_account_platform.currentData()
+        if not platform_key:
+            return
+        rows = getattr(self, "_job_account_snapshots", [])
+        target_accounts = {
+            row["account_id"] for row in rows if row.get("ai_platform", "doubao") == platform_key
+        }
+        for index in range(self.job_accounts.list_widget.count()):
+            item = self.job_accounts.list_widget.item(index)
+            value = item.data(Qt.ItemDataRole.UserRole)
+            item.setCheckState(
+                Qt.CheckState.Checked if value in target_accounts else Qt.CheckState.Unchecked
+            )
+        self.job_accounts._sync_label()
+
     def _job_card(self, row: dict[str, Any]) -> QFrame:
         card = QFrame()
         card.setObjectName("jobCard")
@@ -2976,6 +3057,7 @@ class NativeDashboard(QWidget):
                 str(len(self.backend.account_pool.discover_account_ids()))
             )
             self.refresh_jobs()
+            self.refresh_job_account_options()
         elif current is self.accounts_page:
             self.refresh_accounts()
         elif current is self.history_page:
@@ -3269,12 +3351,25 @@ class NativeDashboard(QWidget):
             self.refreshing_accounts = False
             self.engine_badge.setText("● 采集引擎运行中")
             self.engine_badge.setToolTip("")
-            ready_count = sum(1 for row in rows if row["chat_ready"])
-            opened_count = sum(1 for row in rows if row["started"])
-            warning_count = sum(1 for row in rows if row.get("snapshot_error"))
+
+            platform_options = [(platform.name, platform.key) for platform in list_platforms()]
+            self.account_platform_filter.set_options(platform_options)
+            selected_platforms = set(self.account_platform_filter.selected_values())
+
+            filtered_rows = rows
+            if selected_platforms:
+                filtered_rows = [
+                    row for row in rows if row.get("ai_platform", "doubao") in selected_platforms
+                ]
+
+            ready_count = sum(1 for row in filtered_rows if row["chat_ready"])
+            opened_count = sum(1 for row in filtered_rows if row["started"])
+            warning_count = sum(1 for row in filtered_rows if row.get("snapshot_error"))
             self.ready_accounts_value.setText(str(ready_count))
             self.accounts_summary.setText(
-                f"共 {len(rows)} 个账号 · 已打开 {opened_count} · 可采集 {ready_count}"
+                f"共 {len(filtered_rows)} 个账号"
+                + (f" / 总计 {len(rows)} 个" if len(filtered_rows) != len(rows) else "")
+                + f" · 已打开 {opened_count} · 可采集 {ready_count}"
                 + (f" · {warning_count} 个状态读取超时" if warning_count else "")
             )
             signature = tuple(
@@ -3287,17 +3382,22 @@ class NativeDashboard(QWidget):
                     row.get("is_paused"),
                     row.get("tab_hidden"),
                     row.get("snapshot_error"),
+                    row.get("ai_platform", "doubao"),
                 )
                 for row in rows
             )
-            if getattr(self, "_accounts_signature", None) == signature:
+            selected_signature = tuple(sorted(selected_platforms))
+            full_signature = (signature, selected_signature)
+            if getattr(self, "_accounts_signature", None) == full_signature:
                 return
-            self._accounts_signature = signature
+            self._accounts_signature = full_signature
             self._clear_cards(self.accounts_cards_layout)
-            for row in rows:
+            for row in filtered_rows:
                 self.accounts_cards_layout.addWidget(self._account_card(row))
-            if not rows:
-                empty = QLabel("暂无账号，请在上方创建账号并完成登录")
+            if not filtered_rows:
+                empty = QLabel(
+                    "暂无账号，请在上方创建账号并完成登录" if not rows else "当前平台下没有账号"
+                )
                 empty.setObjectName("muted")
                 empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.accounts_cards_layout.addWidget(empty)
@@ -3475,7 +3575,7 @@ class NativeDashboard(QWidget):
             job = self.backend.research_store.create_job(
                 name=self.job_name.text(),
                 keywords=keywords,
-                account_ids=[],
+                account_ids=self.job_accounts.selected_values(),
                 prompt_template=template,
                 scheduled_at=None,
                 interval_seconds=self.interval_seconds.value(),
@@ -3491,11 +3591,13 @@ class NativeDashboard(QWidget):
         def completed(_: Any) -> None:
             self.keywords.clear()
             self.job_name.clear()
+            self.job_accounts.clear_selection()
+            self.job_account_platform.setCurrentIndex(0)
             self.refresh_jobs()
             QMessageBox.information(
                 self,
                 "采集任务",
-                "任务已启动，系统会自动调度全部可用账号。",
+                "任务已启动，系统会自动调度选中的可用账号。",
             )
 
         self._watch(future, completed)
@@ -3759,7 +3861,7 @@ class NativeDashboard(QWidget):
                 tuple(summary.items()),
                 tuple((row["platform"], row["count"]) for row in dashboard["platforms"]),
                 tuple(platforms),
-                tuple((job["id"], job["result_count"]) for job in jobs),
+                tuple((job["id"], job["keyword_count"]) for job in jobs),
                 tuple(accounts),
                 tuple(keyword_options),
             )
@@ -4018,7 +4120,7 @@ class NativeDashboard(QWidget):
                     )
                     for row in rows
                 ),
-                tuple((job["id"], job["result_count"]) for job in jobs),
+                tuple((job["id"], job["keyword_count"]) for job in jobs),
                 tuple(accounts),
                 tuple(keyword_options),
             )

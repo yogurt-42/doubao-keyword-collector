@@ -15,6 +15,20 @@ from typing import Any
 DEFAULT_BROWSER_CHANNEL = "msedge" if os.name == "nt" else ""
 
 
+class _NoiseFilter(logging.Filter):
+    """Suppress known non-functional noise from Qt WebEngine and page scripts."""
+
+    _PATTERNS = (
+        "stun.l.google.com",
+        "upgrade-insecure-requests",
+        "was preloaded using link preload but not used",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not any(pattern in message for pattern in self._PATTERNS)
+
+
 def configure_logging(*, data_root: Path | None = None) -> Path:
     """Route application logs to a rolling file under the data root.
 
@@ -27,6 +41,7 @@ def configure_logging(*, data_root: Path | None = None) -> Path:
     log_path = log_dir / f"app-{datetime.now().strftime('%Y%m%d')}.log"
 
     formatter = logging.Formatter("%(asctime)s %(levelname)-8s [%(name)s:%(lineno)d] %(message)s")
+    noise_filter = _NoiseFilter()
 
     file_handler = logging.handlers.RotatingFileHandler(
         log_path,
@@ -35,9 +50,11 @@ def configure_logging(*, data_root: Path | None = None) -> Path:
         encoding="utf-8",
     )
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(noise_filter)
 
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
+    console_handler.addFilter(noise_filter)
 
     root = logging.getLogger()
     root.setLevel(logging.INFO)

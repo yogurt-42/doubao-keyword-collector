@@ -11,6 +11,10 @@ BACKGROUND_BROWSER_FLAGS = (
     "--disable-background-timer-throttling",
     "--disable-renderer-backgrounding",
     "--disable-backgrounding-occluded-windows",
+    "--disable-webrtc",
+    "--disable-features=WebRtcHideLocalIpsWithMdns,WebRTC",
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--log-level=3",
 )
 
 
