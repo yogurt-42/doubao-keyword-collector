@@ -105,6 +105,7 @@ class Settings:
     update_channel: str = "stable"
     default_ai_platform: str = "doubao"
     account_platforms: dict[str, str] | None = None
+    account_startup_states: dict[str, Any] | None = None
     video_daily_credits: int = 10
     video_15s_credit_cost: int = 4
     video_10s_credit_cost: int = 3
@@ -116,6 +117,7 @@ class Settings:
         self.account_categories = dict(self.account_categories or {})
         self.account_tab_hidden = dict(self.account_tab_hidden or {})
         self.account_platforms = dict(self.account_platforms or {})
+        self.account_startup_states = dict(self.account_startup_states or {})
         self.video_daily_credits = max(0, int(self.video_daily_credits))
         self.video_15s_credit_cost = max(0, int(self.video_15s_credit_cost))
         self.video_10s_credit_cost = max(0, int(self.video_10s_credit_cost))

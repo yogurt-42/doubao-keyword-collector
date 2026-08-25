@@ -4,14 +4,17 @@ import json
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 from .platforms import get_platform
 from .research_links import platform_for_reference
 from .research_platforms import category_for_url, platform_category
+
+_T = TypeVar("_T")
 
 LONG_TAIL_TOP_N = 20
 
@@ -88,6 +91,8 @@ class ResearchStore:
         self.path = path.resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
+        self._cache: dict[str, Any] = {}
+        self._cache_ts: dict[str, float] = {}
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -101,6 +106,30 @@ class ResearchStore:
             connection.execute("PRAGMA cache_size = -32768")
             self._local.connection = connection
         return connection
+
+    def _cache_key(self, name: str, **kwargs: Any) -> str:
+        parts = [name]
+        for key, value in sorted(kwargs.items()):
+            if isinstance(value, list):
+                value = tuple(value)
+            parts.append(f"{key}={value!r}")
+        return "|".join(parts)
+
+    def _cached(self, name: str, ttl: float, fn: Callable[[], _T]) -> _T:
+        from time import monotonic
+
+        now = monotonic()
+        ts = self._cache_ts.get(name, 0)
+        if name in self._cache and now - ts < ttl:
+            return self._cache[name]
+        value = fn()
+        self._cache[name] = value
+        self._cache_ts[name] = now
+        return value
+
+    def _invalidate_cache(self) -> None:
+        self._cache.clear()
+        self._cache_ts.clear()
 
     def _initialize(self) -> None:
         with self._connect() as connection:
@@ -206,6 +235,22 @@ class ResearchStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_research_schedules_due
                 ON research_schedules(enabled, next_run_at);
+                CREATE INDEX IF NOT EXISTS idx_research_results_keyword_nocase
+                ON research_results(keyword COLLATE NOCASE);
+                CREATE INDEX IF NOT EXISTS idx_research_results_filter_covering
+                ON research_results(
+                    job_id, account_id, collected_date, keyword, platform, platform_type
+                );
+                CREATE INDEX IF NOT EXISTS idx_research_results_job_platform
+                ON research_results(job_id, platform);
+                CREATE INDEX IF NOT EXISTS idx_research_results_platform_stale
+                ON research_results(platform_type, platform);
+                CREATE INDEX IF NOT EXISTS idx_account_runtime_last_used
+                ON account_runtime(last_used_at);
+                CREATE INDEX IF NOT EXISTS idx_research_jobs_created_at
+                ON research_jobs(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_research_results_collected_at
+                ON research_results(collected_at DESC);
                 """
             )
             connection.execute(
@@ -285,6 +330,7 @@ class ResearchStore:
         max_attempts: int,
         ai_platform: str = "doubao",
     ) -> dict[str, Any]:
+        self._invalidate_cache()
         job_id = uuid.uuid4().hex
         created_at = iso_now()
         first_due = datetime.fromisoformat(normalize_datetime(scheduled_at))
@@ -405,6 +451,7 @@ class ResearchStore:
         return [self._job_row(row) for row in rows]
 
     def set_job_status(self, job_id: str, status: str) -> dict[str, Any]:
+        self._invalidate_cache()
         if status not in {"running", "paused", "cancelled"}:
             raise ValueError("不支持的任务状态")
         with self._connect() as connection:
@@ -429,6 +476,7 @@ class ResearchStore:
             return self.get_job(job_id)
 
     def delete_job(self, job_id: str) -> None:
+        self._invalidate_cache()
         with self._connect() as connection:
             result = connection.execute(
                 "DELETE FROM research_jobs WHERE id = ?",
@@ -438,6 +486,7 @@ class ResearchStore:
                 raise KeyError(job_id)
 
     def rename_job(self, job_id: str, name: str) -> dict[str, Any]:
+        self._invalidate_cache()
         name = (name or "").strip()
         if not name:
             raise ValueError("任务名称不能为空")
@@ -457,7 +506,7 @@ class ResearchStore:
         Only updates rows with an empty platform_type or an unknown platform,
         which is the common case after importing new platform rules.
         """
-
+        self._invalidate_cache()
         limit = max(batch_size, 1)
         updated = 0
         with self._connect() as connection:
@@ -511,6 +560,7 @@ class ResearchStore:
         return output
 
     def mark_task_running(self, task_id: str, account_id: str) -> bool:
+        self._invalidate_cache()
         with self._connect() as connection:
             result = connection.execute(
                 """
@@ -536,6 +586,7 @@ class ResearchStore:
             return bool(result.rowcount)
 
     def update_task_progress(self, task_id: str, message: str) -> None:
+        self._invalidate_cache()
         text = message.strip()[:500]
         with self._connect() as connection:
             task = connection.execute(
@@ -569,6 +620,7 @@ class ResearchStore:
         links: list[dict[str, str]],
         account_id: str,
     ) -> None:
+        self._invalidate_cache()
         now = iso_now()
         with self._connect() as connection:
             task = connection.execute(
@@ -623,6 +675,7 @@ class ResearchStore:
         item: dict[str, str],
         account_id: str,
     ) -> bool:
+        self._invalidate_cache()
         now = iso_now()
         with self._connect() as connection:
             task = connection.execute(
@@ -663,6 +716,7 @@ class ResearchStore:
             return bool(result.rowcount)
 
     def fail_or_retry_task(self, task_id: str, error: str, *, retry: bool) -> None:
+        self._invalidate_cache()
         now = iso_now()
         with self._connect() as connection:
             task = connection.execute(
@@ -1087,6 +1141,7 @@ class ResearchStore:
             )
 
     def rename_account_references(self, old_account_id: str, new_account_id: str) -> None:
+        self._invalidate_cache()
         with self._connect() as connection:
             connection.execute(
                 "DELETE FROM account_runtime WHERE account_id = ?",
@@ -1218,27 +1273,42 @@ class ResearchStore:
         limit: int = 500,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        where, params = self._result_filter(
+        key = self._cache_key(
+            "list_results",
             job_id=job_id,
             keyword=keyword,
             platform=platform,
             account_id=account_id,
             date_from=date_from,
             date_to=date_to,
+            limit=limit,
+            offset=offset,
         )
-        params.extend([min(max(limit, 1), 100000), max(offset, 0)])
-        with self._connect() as connection:
-            rows = connection.execute(
-                f"""
-                SELECT r.*, j.name AS job_name, j.ai_platform AS ai_platform
-                FROM research_results r
-                JOIN research_jobs j ON j.id = r.job_id
-                {where}
-                ORDER BY r.collected_at DESC, r.id DESC LIMIT ? OFFSET ?
-                """,
-                params,
-            ).fetchall()
-        return [dict(row) for row in rows]
+
+        def _query() -> list[dict[str, Any]]:
+            where, params = self._result_filter(
+                job_id=job_id,
+                keyword=keyword,
+                platform=platform,
+                account_id=account_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            params.extend([min(max(limit, 1), 100000), max(offset, 0)])
+            with self._connect() as connection:
+                rows = connection.execute(
+                    f"""
+                    SELECT r.*, j.name AS job_name, j.ai_platform AS ai_platform
+                    FROM research_results r
+                    JOIN research_jobs j ON j.id = r.job_id
+                    {where}
+                    ORDER BY r.collected_at DESC, r.id DESC LIMIT ? OFFSET ?
+                    """,
+                    params,
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        return self._cached(key, 2.0, _query)
 
     def result_dashboard(
         self,
@@ -1250,7 +1320,8 @@ class ResearchStore:
         date_from: str = "",
         date_to: str = "",
     ) -> dict[str, Any]:
-        where, params = self._result_filter(
+        key = self._cache_key(
+            "result_dashboard",
             job_id=job_id,
             keyword=keyword,
             platform=platform,
@@ -1258,56 +1329,68 @@ class ResearchStore:
             date_from=date_from,
             date_to=date_to,
         )
-        with self._connect() as connection:
-            summary = connection.execute(
-                f"""
-                SELECT COUNT(*) AS total,
-                    COUNT(DISTINCT r.job_id) AS jobs,
-                    COUNT(DISTINCT r.keyword) AS keywords,
-                    COUNT(DISTINCT NULLIF(r.platform, '')) AS platforms
-                FROM research_results r
-                {where}
-                """,
-                params,
-            ).fetchone()
-            platform_rows = connection.execute(
-                f"""
-                SELECT COALESCE(NULLIF(r.platform, ''), '未知平台') AS platform,
-                    COALESCE(MAX(NULLIF(r.platform_type, '')), '') AS type,
-                    COUNT(*) AS count
-                FROM research_results r
-                {where}
-                GROUP BY COALESCE(NULLIF(r.platform, ''), '未知平台')
-                ORDER BY count DESC, platform
-                """,
-                params,
-            ).fetchall()
-            type_rows = connection.execute(
-                f"""
-                SELECT COALESCE(NULLIF(r.platform_type, ''), '未分类') AS type,
-                    COUNT(*) AS count
-                FROM research_results r
-                {where}
-                GROUP BY COALESCE(NULLIF(r.platform_type, ''), '未分类')
-                ORDER BY count DESC
-                """,
-                params,
-            ).fetchall()
-        total = int(summary["total"])
-        platform_rows = [dict(row) for row in platform_rows]
-        long_tail_rows = platform_rows[LONG_TAIL_TOP_N:]
-        long_tail_total = sum(int(row["count"]) for row in long_tail_rows)
-        long_tail = {
-            "total": long_tail_total,
-            "share": round(long_tail_total / total * 100, 1) if total else 0.0,
-            "by_platform": long_tail_rows,
-            "by_type": [dict(row) for row in type_rows],
-        }
-        return {
-            "summary": dict(summary),
-            "platforms": platform_rows,
-            "long_tail": long_tail,
-        }
+
+        def _query() -> dict[str, Any]:
+            where, params = self._result_filter(
+                job_id=job_id,
+                keyword=keyword,
+                platform=platform,
+                account_id=account_id,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            with self._connect() as connection:
+                summary = connection.execute(
+                    f"""
+                    SELECT COUNT(*) AS total,
+                        COUNT(DISTINCT r.job_id) AS jobs,
+                        COUNT(DISTINCT r.keyword) AS keywords,
+                        COUNT(DISTINCT NULLIF(r.platform, '')) AS platforms
+                    FROM research_results r
+                    {where}
+                    """,
+                    params,
+                ).fetchone()
+                platform_rows = connection.execute(
+                    f"""
+                    SELECT COALESCE(NULLIF(r.platform, ''), '未知平台') AS platform,
+                        COALESCE(MAX(NULLIF(r.platform_type, '')), '') AS type,
+                        COUNT(*) AS count
+                    FROM research_results r
+                    {where}
+                    GROUP BY COALESCE(NULLIF(r.platform, ''), '未知平台')
+                    ORDER BY count DESC, platform
+                    """,
+                    params,
+                ).fetchall()
+                type_rows = connection.execute(
+                    f"""
+                    SELECT COALESCE(NULLIF(r.platform_type, ''), '未分类') AS type,
+                        COUNT(*) AS count
+                    FROM research_results r
+                    {where}
+                    GROUP BY COALESCE(NULLIF(r.platform_type, ''), '未分类')
+                    ORDER BY count DESC
+                    """,
+                    params,
+                ).fetchall()
+            total = int(summary["total"])
+            platform_rows = [dict(row) for row in platform_rows]
+            long_tail_rows = platform_rows[LONG_TAIL_TOP_N:]
+            long_tail_total = sum(int(row["count"]) for row in long_tail_rows)
+            long_tail = {
+                "total": long_tail_total,
+                "share": round(long_tail_total / total * 100, 1) if total else 0.0,
+                "by_platform": long_tail_rows,
+                "by_type": [dict(row) for row in type_rows],
+            }
+            return {
+                "summary": dict(summary),
+                "platforms": platform_rows,
+                "long_tail": long_tail,
+            }
+
+        return self._cached(key, 3.0, _query)
 
     def long_tail_analysis(
         self,
@@ -1332,7 +1415,8 @@ class ResearchStore:
         Returns per-platform frequency, keyword breadth, density, a representative
         link/domain, a keyword sample, and the quadrant classification.
         """
-        where, params = self._result_filter(
+        key = self._cache_key(
+            "long_tail_analysis",
             job_id=job_id,
             keyword=keyword,
             platform=platform,
@@ -1341,156 +1425,182 @@ class ResearchStore:
             account_ids=account_ids,
             date_from=date_from,
             date_to=date_to,
+            split_mode=split_mode,
+            breadth_threshold=breadth_threshold,
+            freq_threshold=freq_threshold,
+            density_threshold=density_threshold,
+            noise_density_threshold=noise_density_threshold,
+            keywords_sample_limit=keywords_sample_limit,
         )
-        with self._connect() as connection:
-            rows = connection.execute(
-                f"""
-                SELECT
-                    platform,
-                    COUNT(*) AS freq,
-                    COUNT(DISTINCT keyword) AS breadth,
-                    COALESCE(MAX(NULLIF(platform_type, '')), '') AS type
-                FROM research_results r
-                {where}
-                    AND platform <> ''
-                GROUP BY platform
-                ORDER BY freq DESC, platform
-                """,
-                params,
-            ).fetchall()
-            link_rows = connection.execute(
-                f"""
-                SELECT platform, link, COUNT(*) AS c
-                FROM research_results r
-                {where}
-                    AND platform <> ''
-                GROUP BY platform, link
-                ORDER BY platform, c DESC, link ASC
-                """,
-                params,
-            ).fetchall()
-            keyword_rows = connection.execute(
-                f"""
-                SELECT DISTINCT platform, keyword
-                FROM research_results r
-                {where}
-                    AND platform <> ''
-                    AND keyword <> ''
-                ORDER BY platform, keyword
-                """,
-                params,
-            ).fetchall()
-            total_row = connection.execute(
-                f"SELECT COUNT(*) FROM research_results r {where}", params
-            ).fetchone()
-        total_records = int(total_row[0]) if total_row else 0
 
-        representative_links: dict[str, str] = {}
-        for row in link_rows:
-            platform = row["platform"]
-            if platform not in representative_links:
-                representative_links[platform] = row["link"]
+        def _compute() -> dict[str, Any]:
+            where, params = self._result_filter(
+                job_id=job_id,
+                keyword=keyword,
+                platform=platform,
+                platforms=platforms,
+                account_id=account_id,
+                account_ids=account_ids,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            with self._connect() as connection:
+                rows = connection.execute(
+                    f"""
+                    SELECT
+                        platform,
+                        COUNT(*) AS freq,
+                        COUNT(DISTINCT keyword) AS breadth,
+                        COALESCE(MAX(NULLIF(platform_type, '')), '') AS type
+                    FROM research_results r
+                    {where}
+                        AND platform <> ''
+                    GROUP BY platform
+                    ORDER BY freq DESC, platform
+                    """,
+                    params,
+                ).fetchall()
+                link_rows = connection.execute(
+                    f"""
+                    SELECT platform, link, COUNT(*) AS c
+                    FROM research_results r
+                    {where}
+                        AND platform <> ''
+                    GROUP BY platform, link
+                    ORDER BY platform, c DESC, link ASC
+                    """,
+                    params,
+                ).fetchall()
+                keyword_rows = connection.execute(
+                    f"""
+                    SELECT DISTINCT platform, keyword
+                    FROM research_results r
+                    {where}
+                        AND platform <> ''
+                        AND keyword <> ''
+                    ORDER BY platform, keyword
+                    """,
+                    params,
+                ).fetchall()
+                total_row = connection.execute(
+                    f"SELECT COUNT(*) FROM research_results r {where}", params
+                ).fetchone()
+            total_records = int(total_row[0]) if total_row else 0
 
-        keywords_by_platform: dict[str, list[str]] = {}
-        for row in keyword_rows:
-            platform = row["platform"]
-            sample = keywords_by_platform.setdefault(platform, [])
-            if len(sample) < keywords_sample_limit:
-                sample.append(row["keyword"])
+            representative_links: dict[str, str] = {}
+            for row in link_rows:
+                platform_name = row["platform"]
+                if platform_name not in representative_links:
+                    representative_links[platform_name] = row["link"]
 
-        platforms: list[dict[str, Any]] = []
-        for row in rows:
-            platform = row["platform"]
-            keywords_sample = keywords_by_platform.get(platform, [])
-            link = representative_links.get(platform, "")
-            domain = urlparse(link).netloc or str(platform)
-            platforms.append(
-                {
-                    "platform": platform,
-                    "domain": domain,
-                    "representative_link": link,
-                    "freq": int(row["freq"]),
-                    "breadth": int(row["breadth"]),
-                    "density": round(int(row["freq"]) / int(row["breadth"]), 2),
-                    "type": row["type"],
-                    "keywords_sample": keywords_sample,
-                }
+            keywords_by_platform: dict[str, list[str]] = {}
+            for row in keyword_rows:
+                platform_name = row["platform"]
+                sample = keywords_by_platform.setdefault(platform_name, [])
+                if len(sample) < keywords_sample_limit:
+                    sample.append(row["keyword"])
+
+            platform_rows: list[dict[str, Any]] = []
+            for row in rows:
+                platform_name = row["platform"]
+                keywords_sample = keywords_by_platform.get(platform_name, [])
+                link = representative_links.get(platform_name, "")
+                domain = urlparse(link).netloc or str(platform_name)
+                platform_rows.append(
+                    {
+                        "platform": platform_name,
+                        "domain": domain,
+                        "representative_link": link,
+                        "freq": int(row["freq"]),
+                        "breadth": int(row["breadth"]),
+                        "density": round(int(row["freq"]) / int(row["breadth"]), 2),
+                        "type": row["type"],
+                        "keywords_sample": keywords_sample,
+                    }
+                )
+
+            medians: dict[str, float] = {}
+            if split_mode == "median" and platform_rows:
+                breadth_values = sorted(p["breadth"] for p in platform_rows)
+                freq_values = sorted(p["freq"] for p in platform_rows)
+                n = len(breadth_values)
+                medians["breadth"] = (
+                    breadth_values[n // 2]
+                    if n % 2
+                    else (breadth_values[n // 2 - 1] + breadth_values[n // 2]) / 2
+                )
+                medians["freq"] = (
+                    freq_values[n // 2]
+                    if n % 2
+                    else (freq_values[n // 2 - 1] + freq_values[n // 2]) / 2
+                )
+
+            def classify(row: dict[str, Any]) -> str:
+                if split_mode == "median":
+                    high_breadth = row["breadth"] >= medians["breadth"]
+                    high_freq = row["freq"] > medians["freq"]
+                else:
+                    high_breadth = row["breadth"] >= breadth_threshold
+                    high_freq = row["freq"] > freq_threshold
+                density = row["density"]
+                if high_breadth and high_freq:
+                    return "头部主流媒体"
+                if high_breadth and not high_freq:
+                    if density >= noise_density_threshold:
+                        return "虚假长尾(噪声)"
+                    if density <= density_threshold:
+                        return "垂直长尾宝藏"
+                    return "普通垂直信源"
+                if not high_breadth and high_freq:
+                    return "特定品类垂直站"
+                return "一次性/僵尸信源"
+
+            for row in platform_rows:
+                row["quadrant"] = classify(row)
+
+            quadrant_order = [
+                "垂直长尾宝藏",
+                "虚假长尾(噪声)",
+                "头部主流媒体",
+                "特定品类垂直站",
+                "普通垂直信源",
+                "一次性/僵尸信源",
+            ]
+            quadrants: dict[str, list[dict[str, Any]]] = {name: [] for name in quadrant_order}
+            for row in platform_rows:
+                quadrants[row["quadrant"]].append(row)
+
+            target_long_tail = [
+                dict(row) for row in platform_rows if row["quadrant"] == "垂直长尾宝藏"
+            ]
+            target_long_tail.sort(
+                key=lambda row: (-row["breadth"], row["density"], row["platform"])
             )
 
-        medians: dict[str, float] = {}
-        if split_mode == "median" and platforms:
-            breadth_values = sorted(p["breadth"] for p in platforms)
-            freq_values = sorted(p["freq"] for p in platforms)
-            n = len(breadth_values)
-            medians["breadth"] = (
-                breadth_values[n // 2]
-                if n % 2
-                else (breadth_values[n // 2 - 1] + breadth_values[n // 2]) / 2
-            )
-            medians["freq"] = (
-                freq_values[n // 2]
-                if n % 2
-                else (freq_values[n // 2 - 1] + freq_values[n // 2]) / 2
-            )
+            return {
+                "params": {
+                    "split_mode": split_mode,
+                    "breadth_threshold": breadth_threshold,
+                    "freq_threshold": freq_threshold,
+                    "density_threshold": density_threshold,
+                    "noise_density_threshold": noise_density_threshold,
+                    "medians": medians,
+                },
+                "summary": {
+                    "total_records": total_records,
+                    "platform_count": len(platform_rows),
+                    "target_count": len(target_long_tail),
+                    "noise_count": len(quadrants["虚假长尾(噪声)"]),
+                    "quadrant_counts": {
+                        name: len(items) for name, items in quadrants.items() if items
+                    },
+                },
+                "platforms": platform_rows,
+                "target_long_tail": target_long_tail,
+                "quadrants": quadrants,
+            }
 
-        def classify(row: dict[str, Any]) -> str:
-            if split_mode == "median":
-                high_breadth = row["breadth"] >= medians["breadth"]
-                high_freq = row["freq"] > medians["freq"]
-            else:
-                high_breadth = row["breadth"] >= breadth_threshold
-                high_freq = row["freq"] > freq_threshold
-            density = row["density"]
-            if high_breadth and high_freq:
-                return "头部主流媒体"
-            if high_breadth and not high_freq:
-                if density >= noise_density_threshold:
-                    return "虚假长尾(噪声)"
-                if density <= density_threshold:
-                    return "垂直长尾宝藏"
-                return "普通垂直信源"
-            if not high_breadth and high_freq:
-                return "特定品类垂直站"
-            return "一次性/僵尸信源"
-
-        for row in platforms:
-            row["quadrant"] = classify(row)
-
-        quadrant_order = [
-            "垂直长尾宝藏",
-            "虚假长尾(噪声)",
-            "头部主流媒体",
-            "特定品类垂直站",
-            "普通垂直信源",
-            "一次性/僵尸信源",
-        ]
-        quadrants: dict[str, list[dict[str, Any]]] = {name: [] for name in quadrant_order}
-        for row in platforms:
-            quadrants[row["quadrant"]].append(row)
-
-        target_long_tail = [dict(row) for row in platforms if row["quadrant"] == "垂直长尾宝藏"]
-        target_long_tail.sort(key=lambda row: (-row["breadth"], row["density"], row["platform"]))
-
-        return {
-            "params": {
-                "split_mode": split_mode,
-                "breadth_threshold": breadth_threshold,
-                "freq_threshold": freq_threshold,
-                "density_threshold": density_threshold,
-                "noise_density_threshold": noise_density_threshold,
-                "medians": medians,
-            },
-            "summary": {
-                "total_records": total_records,
-                "platform_count": len(platforms),
-                "target_count": len(target_long_tail),
-                "noise_count": len(quadrants["虚假长尾(噪声)"]),
-                "quadrant_counts": {name: len(items) for name, items in quadrants.items() if items},
-            },
-            "platforms": platforms,
-            "target_long_tail": target_long_tail,
-            "quadrants": quadrants,
-        }
+        return self._cached(key, 5.0, _compute)
 
     def result_jobs(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -1544,102 +1654,114 @@ class ResearchStore:
         platform: str = "",
         account_id: str = "",
     ) -> dict[str, Any]:
-        where_a, params_a = self._result_filter(
-            job_ids=job_ids_a,
+        key = self._cache_key(
+            "source_comparison",
+            job_ids_a=tuple(sorted(job_ids_a)),
+            job_ids_b=tuple(sorted(job_ids_b)),
             keyword=keyword,
             platform=platform,
             account_id=account_id,
         )
-        where_b, params_b = self._result_filter(
-            job_ids=job_ids_b,
-            keyword=keyword,
-            platform=platform,
-            account_id=account_id,
-        )
 
-        def counts_for(
-            connection: sqlite3.Connection, where: str, params: list[Any]
-        ) -> dict[str, int]:
-            rows = connection.execute(
-                f"""
-                SELECT COALESCE(NULLIF(r.platform, ''), '未知平台') AS platform,
-                    COUNT(*) AS count
-                FROM research_results r
-                {where}
-                GROUP BY COALESCE(NULLIF(r.platform, ''), '未知平台')
-                """,
-                params,
-            ).fetchall()
-            return {str(row["platform"]): int(row["count"]) for row in rows}
-
-        with self._connect() as connection:
-            counts_a = counts_for(connection, where_a, params_a)
-            counts_b = counts_for(connection, where_b, params_b)
-
-        rows: list[dict[str, Any]] = []
-        total_a = sum(counts_a.values())
-        total_b = sum(counts_b.values())
-        for source in sorted(set(counts_a) | set(counts_b)):
-            a_count = counts_a.get(source, 0)
-            b_count = counts_b.get(source, 0)
-            delta = b_count - a_count
-            if a_count == 0 and b_count > 0:
-                status = "added"
-                change_rate: float | None = None
-                movement = "added"
-            elif a_count > 0 and b_count == 0:
-                status = "removed"
-                change_rate = -100.0
-                movement = "removed"
-            elif delta > 0:
-                status = "continued"
-                change_rate = round(delta / a_count * 100, 1)
-                movement = "increased"
-            elif delta < 0:
-                status = "continued"
-                change_rate = round(delta / a_count * 100, 1)
-                movement = "decreased"
-            else:
-                status = "continued"
-                change_rate = 0.0
-                movement = "unchanged"
-            rows.append(
-                {
-                    "platform": source,
-                    "type": platform_category(source),
-                    "a_count": a_count,
-                    "b_count": b_count,
-                    "delta": delta,
-                    "change_rate": change_rate,
-                    "status": status,
-                    "movement": movement,
-                    "a_share": round(a_count / total_a * 100, 1) if total_a else 0.0,
-                    "b_share": round(b_count / total_b * 100, 1) if total_b else 0.0,
-                }
+        def _compute() -> dict[str, Any]:
+            where_a, params_a = self._result_filter(
+                job_ids=job_ids_a,
+                keyword=keyword,
+                platform=platform,
+                account_id=account_id,
             )
-        status_order = {"added": 0, "removed": 1, "continued": 2}
-        rows.sort(
-            key=lambda row: (
-                status_order[str(row["status"])],
-                -abs(int(row["delta"])),
-                str(row["platform"]).casefold(),
+            where_b, params_b = self._result_filter(
+                job_ids=job_ids_b,
+                keyword=keyword,
+                platform=platform,
+                account_id=account_id,
             )
-        )
-        return {
-            "summary": {
-                "a_total": total_a,
-                "b_total": total_b,
-                "a_sources": len(counts_a),
-                "b_sources": len(counts_b),
-                "delta": total_b - total_a,
-                "added_platforms": sum(row["status"] == "added" for row in rows),
-                "removed_platforms": sum(row["status"] == "removed" for row in rows),
-                "continued_platforms": sum(row["status"] == "continued" for row in rows),
-                "increased_platforms": sum(row["movement"] == "increased" for row in rows),
-                "decreased_platforms": sum(row["movement"] == "decreased" for row in rows),
-            },
-            "rows": rows,
-        }
+
+            def counts_for(
+                connection: sqlite3.Connection, where: str, params: list[Any]
+            ) -> dict[str, int]:
+                rows = connection.execute(
+                    f"""
+                    SELECT COALESCE(NULLIF(r.platform, ''), '未知平台') AS platform,
+                        COUNT(*) AS count
+                    FROM research_results r
+                    {where}
+                    GROUP BY COALESCE(NULLIF(r.platform, ''), '未知平台')
+                    """,
+                    params,
+                ).fetchall()
+                return {str(row["platform"]): int(row["count"]) for row in rows}
+
+            with self._connect() as connection:
+                counts_a = counts_for(connection, where_a, params_a)
+                counts_b = counts_for(connection, where_b, params_b)
+
+            rows: list[dict[str, Any]] = []
+            total_a = sum(counts_a.values())
+            total_b = sum(counts_b.values())
+            for source in sorted(set(counts_a) | set(counts_b)):
+                a_count = counts_a.get(source, 0)
+                b_count = counts_b.get(source, 0)
+                delta = b_count - a_count
+                if a_count == 0 and b_count > 0:
+                    status = "added"
+                    change_rate: float | None = None
+                    movement = "added"
+                elif a_count > 0 and b_count == 0:
+                    status = "removed"
+                    change_rate = -100.0
+                    movement = "removed"
+                elif delta > 0:
+                    status = "continued"
+                    change_rate = round(delta / a_count * 100, 1)
+                    movement = "increased"
+                elif delta < 0:
+                    status = "continued"
+                    change_rate = round(delta / a_count * 100, 1)
+                    movement = "decreased"
+                else:
+                    status = "continued"
+                    change_rate = 0.0
+                    movement = "unchanged"
+                rows.append(
+                    {
+                        "platform": source,
+                        "type": platform_category(source),
+                        "a_count": a_count,
+                        "b_count": b_count,
+                        "delta": delta,
+                        "change_rate": change_rate,
+                        "status": status,
+                        "movement": movement,
+                        "a_share": round(a_count / total_a * 100, 1) if total_a else 0.0,
+                        "b_share": round(b_count / total_b * 100, 1) if total_b else 0.0,
+                    }
+                )
+            status_order = {"added": 0, "removed": 1, "continued": 2}
+            rows.sort(
+                key=lambda row: (
+                    status_order[str(row["status"])],
+                    -abs(int(row["delta"])),
+                    str(row["platform"]).casefold(),
+                )
+            )
+            return {
+                "summary": {
+                    "a_total": total_a,
+                    "b_total": total_b,
+                    "a_sources": len(counts_a),
+                    "b_sources": len(counts_b),
+                    "delta": total_b - total_a,
+                    "added_platforms": sum(row["status"] == "added" for row in rows),
+                    "removed_platforms": sum(row["status"] == "removed" for row in rows),
+                    "continued_platforms": sum(row["status"] == "continued" for row in rows),
+                    "increased_platforms": sum(row["movement"] == "increased" for row in rows),
+                    "decreased_platforms": sum(row["movement"] == "decreased" for row in rows),
+                },
+                "rows": rows,
+            }
+
+        return self._cached(key, 5.0, _compute)
 
     def result_count(self) -> int:
         with self._connect() as connection:

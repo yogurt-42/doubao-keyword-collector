@@ -839,10 +839,15 @@ class DesktopBackend:
             daemon=True,
         )
         self.thread.start()
-        if not self.ready.wait(10):
-            raise RuntimeError("采集引擎启动超时")
-        if self.start_error is not None:
-            raise RuntimeError(f"采集引擎启动失败：{self.start_error}") from self.start_error
+
+    def is_ready(self) -> bool:
+        return self.ready.is_set()
+
+    def has_start_error(self) -> BaseException | None:
+        return self.start_error
+
+    def wait_for_ready(self, timeout: float = 10) -> bool:
+        return self.ready.wait(timeout)
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self.loop)
@@ -872,6 +877,7 @@ class DesktopBackend:
 
     def shutdown(self) -> concurrent.futures.Future[Any]:
         async def stop() -> None:
+            self.account_pool._shutdown = True
             await self.scheduler.stop()
             await self.account_pool.stop_all()
 
@@ -930,22 +936,50 @@ class NativeDashboard(QWidget):
         self.result_timer = QTimer(self)
         self.result_timer.timeout.connect(self._refresh_visible_results)
         self.result_timer.start(3000)
-        QTimer.singleShot(100, self.refresh_all)
+        self._backend_ready_poll = QTimer(self)
+        self._backend_ready_poll.timeout.connect(self._check_backend_ready)
+        self._backend_ready_poll.start(100)
+        self.engine_badge.setText("● 采集引擎启动中…")
+        self.engine_badge.setToolTip("")
         QTimer.singleShot(250, self.restore_account_sessions)
         QTimer.singleShot(500, self._load_cached_update_info)
         QTimer.singleShot(3000, self._auto_check_update_if_enabled)
 
+    def _check_backend_ready(self) -> None:
+        if self.backend.is_ready():
+            self._backend_ready_poll.stop()
+            self.engine_badge.setText("● 采集引擎运行中")
+            self.engine_badge.setToolTip("")
+            self.refresh_all()
+            return
+        error = self.backend.has_start_error()
+        if error is not None:
+            self._backend_ready_poll.stop()
+            self.engine_badge.setText("● 采集引擎启动失败")
+            self.engine_badge.setToolTip(str(error))
+            QMessageBox.critical(self, "启动失败", f"采集引擎初始化失败：\n{error}")
+
     def restore_account_sessions(self) -> None:
         account_ids = self.backend.account_pool.discover_account_ids()
+        startup_states = self.backend.settings_store.settings.account_startup_states
+        to_restore = [
+            account_id
+            for account_id in account_ids
+            if startup_states.get(account_id, {}).get("started")
+        ]
+
         marker = getattr(self.backend.bridge, "mark_background_open", None)
         if callable(marker):
-            marker(account_ids)
+            marker(to_restore)
 
         async def restore() -> list[str]:
             failed: list[str] = []
-            for account_id in account_ids:
+            for account_id in to_restore:
                 try:
                     await self.backend.account_pool.start_account(account_id)
+                    hidden = startup_states.get(account_id, {}).get("hidden", False)
+                    if hidden:
+                        self.backend.account_pool.set_tab_hidden(account_id, True)
                 except Exception:
                     failed.append(account_id)
             self.backend.scheduler.wake()
@@ -3057,7 +3091,6 @@ class NativeDashboard(QWidget):
                 str(len(self.backend.account_pool.discover_account_ids()))
             )
             self.refresh_jobs()
-            self.refresh_job_account_options()
         elif current is self.accounts_page:
             self.refresh_accounts()
         elif current is self.history_page:
@@ -3068,12 +3101,13 @@ class NativeDashboard(QWidget):
             self.refresh_platforms()
 
     def _on_section_changed(self, _: int) -> None:
-        # 账号环境页不需要像任务页那样频繁刷新；未激活时降到 10 秒。
         if self.sections.currentWidget() is self.accounts_page:
             self.refresh_timer.setInterval(10000)
         else:
             self.refresh_timer.setInterval(3000)
         self.refresh_all()
+        if self.sections.currentWidget() is self.tasks_page:
+            self.refresh_job_account_options()
         if self.sections.currentWidget() is self.long_tail_page:
             self.refresh_long_tail_options()
 
@@ -3325,6 +3359,9 @@ class NativeDashboard(QWidget):
         self._watch(future, lambda _: self.refresh_schedules_page(), label="删除触发计划")
 
     def run_schedule_now(self, schedule_id: str) -> None:
+        if not self._ensure_backend_ready("立即执行计划"):
+            return
+
         def run() -> dict[str, Any]:
             return self.backend.research_store.create_job_from_schedule(schedule_id)
 
@@ -3561,7 +3598,19 @@ class NativeDashboard(QWidget):
         self.keywords.setPlainText("\n".join(([current] if current else []) + values))
         QMessageBox.information(self, "导入完成", f"已导入 {len(values)} 个关键词")
 
+    def _ensure_backend_ready(self, action: str = "该操作") -> bool:
+        if self.backend.is_ready():
+            return True
+        QMessageBox.information(
+            self,
+            "采集引擎初始化中",
+            f"{action}需要等待采集引擎启动完成，请稍后再试。",
+        )
+        return False
+
     def create_job(self) -> None:
+        if not self._ensure_backend_ready("创建任务"):
+            return
         keywords = normalize_keywords(self.keywords.toPlainText().splitlines())
         if not keywords:
             QMessageBox.information(self, "提示", "请填写或导入关键词")

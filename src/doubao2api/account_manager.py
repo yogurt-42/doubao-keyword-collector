@@ -100,6 +100,9 @@ class BrowserAccountPool:
         self._snapshot_failures: dict[str, int] = {}
         self._snapshot_last_attempt: dict[str, float] = {}
         self._snapshot_last_error: dict[str, str] = {}
+        self._config_cache: dict[str, tuple[dict[str, Any], float, float]] = {}
+        self._platform_cache: dict[str, tuple[str, float]] = {}
+        self._shutdown = False
         self._lock = asyncio.Lock()
 
     def get_user_data_path(self, account_id: str | None) -> Path:
@@ -156,18 +159,23 @@ class BrowserAccountPool:
 
     def get_account_platform(self, account_id: str | None) -> str:
         normalized = normalize_account_id(account_id, self.default_account_id)
-        config = self.account_browser_config(normalized)
+        now = time.monotonic()
+        cached = self._platform_cache.get(normalized)
+        if cached is not None and now - cached[1] < 5.0:
+            return cached[0]
+        platform = self._resolve_account_platform(normalized)
+        self._platform_cache[normalized] = (platform, now)
+        return platform
+
+    def _resolve_account_platform(self, account_id: str) -> str:
+        config = self.account_browser_config(account_id)
         platform = config.get("ai_platform", "")
         if platform:
-            LOGGER.debug("Account %s platform from config: %s", normalized, platform)
             return platform
-        platform = self.store.settings.account_platforms.get(normalized, "")
+        platform = self.store.settings.account_platforms.get(account_id, "")
         if platform:
-            LOGGER.debug("Account %s platform from settings: %s", normalized, platform)
             return platform
-        platform = self.store.settings.default_ai_platform or DEFAULT_PLATFORM_KEY
-        LOGGER.debug("Account %s platform fallback: %s", normalized, platform)
-        return platform
+        return self.store.settings.default_ai_platform or DEFAULT_PLATFORM_KEY
 
     def set_account_platform(self, account_id: str, platform: str) -> None:
         normalized = normalize_account_id(account_id, self.default_account_id)
@@ -178,6 +186,7 @@ class BrowserAccountPool:
         path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         self.store.settings.account_platforms[normalized] = platform
         self.store.save()
+        self._clear_account_caches(normalized)
         LOGGER.info(
             "Set platform for account %s: %s -> %s (config=%s)",
             normalized,
@@ -212,6 +221,7 @@ class BrowserAccountPool:
         managed = ManagedBrowserAccount(account_id, path, client, ai_platform=platform)
         async with self._lock:
             self._managed[account_id] = managed
+        self._update_startup_state(account_id, started=True)
         return managed
 
     async def stop_account(self, account_id: str | None) -> bool:
@@ -230,6 +240,8 @@ class BrowserAccountPool:
         finally:
             async with self._lock:
                 self._stopping.discard(normalized)
+            if not self._shutdown:
+                self._update_startup_state(normalized, started=False)
 
     async def stop_all(self) -> None:
         for account_id in list(self._managed):
@@ -252,6 +264,7 @@ class BrowserAccountPool:
         if path.exists():
             shutil.rmtree(path)
         path.mkdir(parents=True)
+        self._clear_account_caches(normalized)
 
     async def delete_account(self, account_id: str) -> None:
         normalized = normalize_account_id(account_id, self.default_account_id)
@@ -267,6 +280,7 @@ class BrowserAccountPool:
         self.store.settings.account_tab_hidden.pop(normalized, None)
         self.store.settings.account_platforms.pop(normalized, None)
         self.store.save()
+        self._clear_account_caches(normalized)
 
     async def rename_account(self, account_id: str, new_account_id: str) -> str:
         old = normalize_account_id(account_id, self.default_account_id)
@@ -291,10 +305,13 @@ class BrowserAccountPool:
         if platform:
             self.store.settings.account_platforms[new] = platform
         self.store.save()
+        self._clear_account_caches(old)
+        self._clear_account_caches(new)
         return new
 
     async def clear_account_cache(self, account_id: str) -> dict[str, Any]:
         normalized = normalize_account_id(account_id, self.default_account_id)
+        self._clear_account_caches(normalized)
         await self.stop_account(normalized)
         root = self.get_user_data_path(normalized)
         deleted: list[str] = []
@@ -342,15 +359,54 @@ class BrowserAccountPool:
         else:
             self.store.settings.account_tab_hidden.pop(normalized, None)
         self.store.save()
+        self._update_startup_state(normalized, hidden=hidden)
 
     def account_browser_config(self, account_id: str) -> dict[str, Any]:
-        path = self._account_config_path(account_id)
+        normalized = normalize_account_id(account_id, self.default_account_id)
+        path = self._account_config_path(normalized)
         if not path.exists():
+            self._config_cache.pop(normalized, None)
             return {}
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            stat = path.stat()
+            mtime = stat.st_mtime
+        except OSError:
+            self._config_cache.pop(normalized, None)
             return {}
+        now = time.monotonic()
+        cached = self._config_cache.get(normalized)
+        if cached is not None and cached[1] == mtime and now - cached[2] < 5.0:
+            return cached[0]
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            config = {}
+        self._config_cache[normalized] = (config, mtime, now)
+        return config
+
+    def _clear_account_caches(self, account_id: str) -> None:
+        normalized = normalize_account_id(account_id, self.default_account_id)
+        self._config_cache.pop(normalized, None)
+        self._platform_cache.pop(normalized, None)
+
+    def _update_startup_state(
+        self,
+        account_id: str,
+        *,
+        started: bool | None = None,
+        hidden: bool | None = None,
+    ) -> None:
+        normalized = normalize_account_id(account_id, self.default_account_id)
+        state = self.store.settings.account_startup_states.get(normalized, {})
+        if started is not None:
+            state["started"] = started
+        if hidden is not None:
+            state["hidden"] = hidden
+        if state:
+            self.store.settings.account_startup_states[normalized] = state
+        else:
+            self.store.settings.account_startup_states.pop(normalized, None)
+        self.store.save()
 
     @staticmethod
     def _snapshot_backoff_seconds(failures: int) -> int:

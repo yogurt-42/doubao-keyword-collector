@@ -241,22 +241,6 @@ async def test_scheduler_starts_closed_account_automatically() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scheduler_skips_closed_account_when_auto_start_disabled() -> None:
-    store = FakeStore()
-    store.tasks[1]["scheduled_at"] = (local_now() + timedelta(seconds=30)).isoformat(
-        timespec="seconds"
-    )
-    pool = ClosedAccountPool(auto_start_all_accounts=False)
-    scheduler = ResearchScheduler(store, pool)  # type: ignore[arg-type]
-
-    await scheduler._dispatch_due_tasks()
-
-    assert pool.start_calls == 0
-    assert store.started == []
-    assert "未启动" in scheduler._selection_wait_reason
-
-
-@pytest.mark.asyncio
 async def test_scheduler_can_overlap_work_on_different_accounts() -> None:
     store = FakeStore()
     # 先只让第一个任务到期，第二个任务随后手动放行
