@@ -277,6 +277,18 @@ class ResearchStore:
                 )
             self._ensure_platform_type_column(connection)
             self._ensure_ai_platform_column(connection)
+            self._ensure_template_platforms_column(connection)
+
+    def _ensure_template_platforms_column(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(research_job_templates)").fetchall()
+        }
+        if "ai_platforms_json" not in columns:
+            connection.execute(
+                "ALTER TABLE research_job_templates "
+                "ADD COLUMN ai_platforms_json TEXT NOT NULL DEFAULT '[\"doubao\"]'"
+            )
 
     def _ensure_ai_platform_column(self, connection: sqlite3.Connection) -> None:
         columns = {
@@ -795,7 +807,18 @@ class ResearchStore:
     def _job_template_row(self, row: sqlite3.Row) -> dict[str, Any]:
         item = dict(row)
         item["keywords"] = json.loads(item.pop("keywords_json"))
+        raw_platforms = item.pop("ai_platforms_json", None)
+        try:
+            platforms = json.loads(raw_platforms) if raw_platforms else []
+        except (TypeError, json.JSONDecodeError):
+            platforms = []
+        item["ai_platforms"] = [str(value) for value in platforms if value] or ["doubao"]
         return item
+
+    @staticmethod
+    def _normalize_template_platforms(ai_platforms: list[str] | None) -> str:
+        platforms = [str(value).strip() for value in (ai_platforms or []) if str(value).strip()]
+        return json.dumps(platforms or ["doubao"], ensure_ascii=False)
 
     def create_job_template(
         self,
@@ -806,6 +829,7 @@ class ResearchStore:
         interval_seconds: int,
         account_cooldown_seconds: int,
         max_attempts: int,
+        ai_platforms: list[str] | None = None,
     ) -> dict[str, Any]:
         normalized = self._validate_job_template_inputs(keywords, prompt_template, max_attempts)
         template_id = uuid.uuid4().hex
@@ -815,8 +839,9 @@ class ResearchStore:
                 """
                 INSERT INTO research_job_templates (
                     id, name, keywords_json, prompt_template, interval_seconds,
-                    account_cooldown_seconds, max_attempts, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    account_cooldown_seconds, max_attempts, ai_platforms_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     template_id,
@@ -826,6 +851,7 @@ class ResearchStore:
                     interval_seconds,
                     account_cooldown_seconds,
                     max_attempts,
+                    self._normalize_template_platforms(ai_platforms),
                     created_at,
                     created_at,
                 ),
@@ -858,6 +884,7 @@ class ResearchStore:
         interval_seconds: int,
         account_cooldown_seconds: int,
         max_attempts: int,
+        ai_platforms: list[str] | None = None,
     ) -> dict[str, Any]:
         normalized = self._validate_job_template_inputs(keywords, prompt_template, max_attempts)
         updated_at = iso_now()
@@ -871,6 +898,7 @@ class ResearchStore:
                     interval_seconds = ?,
                     account_cooldown_seconds = ?,
                     max_attempts = ?,
+                    ai_platforms_json = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -881,6 +909,7 @@ class ResearchStore:
                     interval_seconds,
                     account_cooldown_seconds,
                     max_attempts,
+                    self._normalize_template_platforms(ai_platforms),
                     updated_at,
                     template_id,
                 ),
@@ -1058,19 +1087,27 @@ class ResearchStore:
             ).fetchall()
         return [self._schedule_row(row) for row in rows]
 
-    def create_job_from_schedule(self, schedule_id: str) -> dict[str, Any]:
+    def create_jobs_from_schedule(self, schedule_id: str) -> list[dict[str, Any]]:
         schedule = self.get_schedule(schedule_id)
         template = self.get_job_template(schedule["template_id"])
-        return self.create_job(
-            name=f"{schedule['name']} - {iso_now()}",
-            keywords=template["keywords"],
-            account_ids=[],  # 由调度器按现有 LRU 逻辑动态选择账号
-            prompt_template=template["prompt_template"],
-            scheduled_at=iso_now(),
-            interval_seconds=template["interval_seconds"],
-            account_cooldown_seconds=template["account_cooldown_seconds"],
-            max_attempts=template["max_attempts"],
-        )
+        return [
+            self.create_job(
+                name=f"{schedule['name']} - {iso_now()}",
+                keywords=template["keywords"],
+                account_ids=[],  # 由调度器按现有 LRU 逻辑动态选择账号
+                prompt_template=template["prompt_template"],
+                scheduled_at=iso_now(),
+                interval_seconds=template["interval_seconds"],
+                account_cooldown_seconds=template["account_cooldown_seconds"],
+                max_attempts=template["max_attempts"],
+                ai_platform=ai_platform,
+            )
+            for ai_platform in template["ai_platforms"]
+        ]
+
+    def create_job_from_schedule(self, schedule_id: str) -> dict[str, Any]:
+        """兼容旧调用方：返回本次触发生成的第一个任务。"""
+        return self.create_jobs_from_schedule(schedule_id)[0]
 
     def advance_schedule(self, schedule_id: str, job_id: str, next_run_at: str) -> None:
         updated_at = iso_now()

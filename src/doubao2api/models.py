@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Message(BaseModel):
@@ -118,7 +118,15 @@ class ResearchJobCreateRequest(BaseModel):
     interval_seconds: int = Field(default=10, ge=1, le=86400)
     account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
     max_attempts: int = Field(default=2, ge=1, le=3)
-    ai_platform: str = "doubao"
+    ai_platforms: list[str] = Field(default_factory=list)
+    # 旧字段，仅为兼容旧客户端；发送 ai_platform 时自动并入 ai_platforms
+    ai_platform: str | None = None
+
+    @model_validator(mode="after")
+    def merge_legacy_platform(self) -> ResearchJobCreateRequest:
+        if not self.ai_platforms:
+            self.ai_platforms = [self.ai_platform or "doubao"]
+        return self
 
 
 class ResearchJobTemplateCreateRequest(BaseModel):
@@ -128,6 +136,7 @@ class ResearchJobTemplateCreateRequest(BaseModel):
     interval_seconds: int = Field(default=10, ge=1, le=86400)
     account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
     max_attempts: int = Field(default=2, ge=1, le=3)
+    ai_platforms: list[str] = Field(default_factory=lambda: ["doubao"])
 
 
 class ResearchJobTemplateUpdateRequest(BaseModel):
@@ -137,6 +146,7 @@ class ResearchJobTemplateUpdateRequest(BaseModel):
     interval_seconds: int = Field(default=10, ge=1, le=86400)
     account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
     max_attempts: int = Field(default=2, ge=1, le=3)
+    ai_platforms: list[str] = Field(default_factory=lambda: ["doubao"])
 
 
 class ResearchScheduleCreateRequest(BaseModel):

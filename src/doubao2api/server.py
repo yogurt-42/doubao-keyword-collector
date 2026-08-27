@@ -522,19 +522,25 @@ def create_app(
             if account_id not in account_ids:
                 account_ids.append(account_id)
         try:
-            return research_store.create_job(
-                name=body.name,
-                keywords=keywords,
-                account_ids=account_ids,
-                prompt_template=body.prompt_template,
-                scheduled_at=body.scheduled_at,
-                interval_seconds=body.interval_seconds,
-                account_cooldown_seconds=body.account_cooldown_seconds,
-                max_attempts=body.max_attempts,
-                ai_platform=body.ai_platform,
-            )
+            jobs = [
+                research_store.create_job(
+                    name=body.name,
+                    keywords=keywords,
+                    account_ids=account_ids,
+                    prompt_template=body.prompt_template,
+                    scheduled_at=body.scheduled_at,
+                    interval_seconds=body.interval_seconds,
+                    account_cooldown_seconds=body.account_cooldown_seconds,
+                    max_attempts=body.max_attempts,
+                    ai_platform=ai_platform,
+                )
+                for ai_platform in body.ai_platforms
+            ]
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if len(jobs) == 1:
+            return jobs[0]
+        return {"jobs": jobs, "count": len(jobs)}
 
     @app.get("/admin/api/research/jobs")
     async def admin_list_research_jobs(limit: int = 100) -> dict[str, Any]:
@@ -614,6 +620,7 @@ def create_app(
                 interval_seconds=body.interval_seconds,
                 account_cooldown_seconds=body.account_cooldown_seconds,
                 max_attempts=body.max_attempts,
+                ai_platforms=body.ai_platforms,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -648,6 +655,7 @@ def create_app(
                 interval_seconds=body.interval_seconds,
                 account_cooldown_seconds=body.account_cooldown_seconds,
                 max_attempts=body.max_attempts,
+                ai_platforms=body.ai_platforms,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="任务模板不存在") from exc
@@ -739,13 +747,15 @@ def create_app(
     @app.post("/admin/api/research/schedules/{schedule_id}/run")
     async def admin_run_research_schedule_now(schedule_id: str) -> dict[str, Any]:
         try:
-            job = research_store.create_job_from_schedule(schedule_id)
+            jobs = research_store.create_jobs_from_schedule(schedule_id)
             research_scheduler.wake()
-            return job
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="定时计划不存在") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if len(jobs) == 1:
+            return jobs[0]
+        return {"jobs": jobs, "count": len(jobs)}
 
     @app.get("/admin/api/research/results")
     async def admin_research_results(

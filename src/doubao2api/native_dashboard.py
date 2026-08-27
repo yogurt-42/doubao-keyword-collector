@@ -222,6 +222,19 @@ class MultiSelectFilter(QWidget):
     def select_all(self) -> None:
         self._set_visible_items(Qt.CheckState.Checked)
 
+    def set_selected_values(self, values: list[str]) -> None:
+        selected = {str(value) for value in values}
+        self._updating = True
+        for index in range(self.list_widget.count()):
+            item = self.list_widget.item(index)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if str(item.data(Qt.ItemDataRole.UserRole)) in selected
+                else Qt.CheckState.Unchecked
+            )
+        self._updating = False
+        self._sync_label()
+
     def clear_selection(self) -> None:
         self._updating = True
         for index in range(self.list_widget.count()):
@@ -951,6 +964,7 @@ class NativeDashboard(QWidget):
             self.engine_badge.setText("● 采集引擎运行中")
             self.engine_badge.setToolTip("")
             self.refresh_all()
+            self.refresh_job_account_options()
             return
         error = self.backend.has_start_error()
         if error is not None:
@@ -1116,7 +1130,7 @@ class NativeDashboard(QWidget):
         layout.addLayout(metrics)
 
         form_group = QGroupBox("新建采集任务")
-        form_group.setMinimumHeight(405)
+        form_group.setMinimumHeight(650)
         form = QVBoxLayout(form_group)
         form.setSpacing(12)
 
@@ -1126,10 +1140,15 @@ class NativeDashboard(QWidget):
         self.job_name.setPlaceholderText("留空将自动生成：首个关键词-平台-日期")
         name_row.addWidget(self.job_name, 1)
         name_row.addWidget(QLabel("AI 平台"))
-        self.job_platform = QComboBox()
-        for platform in list_platforms():
-            self.job_platform.addItem(platform.name, platform.key)
-        name_row.addWidget(self.job_platform)
+        self.job_platforms = MultiSelectFilter("全部平台", selection_unit="平台")
+        self.job_platforms.setToolTip(
+            "勾选多个平台会按平台拆分生成多个任务；不选则默认使用全部平台"
+        )
+        self.job_platforms.set_options(
+            [(platform.name, platform.key) for platform in list_platforms()]
+        )
+        self.job_platforms.selection_changed.connect(self._apply_job_account_platform)
+        name_row.addWidget(self.job_platforms)
         form.addLayout(name_row)
 
         keyword_header = QHBoxLayout()
@@ -1146,8 +1165,8 @@ class NativeDashboard(QWidget):
 
         self.keywords = QTextEdit()
         self.keywords.setPlaceholderText("直接输入关键词，每行一个；也可以导入 Excel / CSV")
-        self.keywords.setMinimumHeight(140)
-        self.keywords.setMaximumHeight(200)
+        self.keywords.setMinimumHeight(240)
+        self.keywords.setMaximumHeight(360)
         self.keywords.textChanged.connect(self._update_keyword_count)
         form.addWidget(self.keywords)
 
@@ -1179,16 +1198,9 @@ class NativeDashboard(QWidget):
 
         account_row = QHBoxLayout()
         account_row.setSpacing(10)
-        account_row.addWidget(QLabel("账号平台"))
-        self.job_account_platform = QComboBox()
-        self.job_account_platform.addItem("全部平台", "")
-        for platform in list_platforms():
-            self.job_account_platform.addItem(platform.name, platform.key)
-        self.job_account_platform.currentIndexChanged.connect(self._apply_job_account_platform)
-        account_row.addWidget(self.job_account_platform)
         account_row.addWidget(QLabel("使用账号"))
         self.job_accounts = MultiSelectFilter("全部账号", selection_unit="账号")
-        self.job_accounts.setToolTip("不选则使用所有可用账号")
+        self.job_accounts.setToolTip("不选则使用所选平台的所有可用账号")
         account_row.addWidget(self.job_accounts, 1)
         account_row.addStretch()
         form.addLayout(account_row)
@@ -2324,6 +2336,15 @@ class NativeDashboard(QWidget):
         self.template_max_attempts.setRange(1, 3)
         self.template_max_attempts.setValue(2)
         template_form.addWidget(self.template_max_attempts, 4, 1)
+
+        template_form.addWidget(QLabel("AI 平台"), 4, 2)
+        self.template_platforms = MultiSelectFilter("豆包", selection_unit="平台")
+        self.template_platforms.setToolTip("勾选多个平台时，触发计划会按平台拆分生成多个任务")
+        self.template_platforms.set_options(
+            [(platform.name, platform.key) for platform in list_platforms()]
+        )
+        self.template_platforms.set_selected_values(["doubao"])
+        template_form.addWidget(self.template_platforms, 4, 3)
         templates_layout.addLayout(template_form)
 
         template_buttons = QHBoxLayout()
@@ -2338,16 +2359,16 @@ class NativeDashboard(QWidget):
         template_buttons.addWidget(self.template_save_button)
         templates_layout.addLayout(template_buttons)
 
-        self.templates_table = QTableWidget(0, 5)
+        self.templates_table = QTableWidget(0, 6)
         self.templates_table.setHorizontalHeaderLabels(
-            ["名称", "关键词数", "提问模板", "编辑", "删除"]
+            ["名称", "平台", "关键词数", "提问模板", "编辑", "删除"]
         )
         self._configure_table(self.templates_table)
         self.templates_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )
         self.templates_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch
+            3, QHeaderView.ResizeMode.Stretch
         )
         self.templates_table.verticalHeader().setDefaultSectionSize(40)
         templates_layout.addWidget(self.templates_table, 1)
@@ -2430,6 +2451,7 @@ class NativeDashboard(QWidget):
         self.template_interval_seconds.setValue(10)
         self.template_account_cooldown_seconds.setValue(0)
         self.template_max_attempts.setValue(2)
+        self.template_platforms.set_selected_values(["doubao"])
         self.template_save_button.setText("保存模板")
 
     def _update_combo(
@@ -2665,15 +2687,9 @@ class NativeDashboard(QWidget):
 
         def apply(rows: list[dict[str, Any]]) -> None:
             self._job_account_snapshots = rows
-            current_platform = self.job_account_platform.currentData()
-            self.job_account_platform.clear()
-            self.job_account_platform.addItem("全部平台", "")
-            for platform in list_platforms():
-                self.job_account_platform.addItem(platform.name, platform.key)
-            if current_platform:
-                index = self.job_account_platform.findData(current_platform)
-                if index >= 0:
-                    self.job_account_platform.setCurrentIndex(index)
+            self.job_platforms.set_options(
+                [(platform.name, platform.key) for platform in list_platforms()]
+            )
             account_options = []
             for row in rows:
                 account_id = row["account_id"]
@@ -2687,12 +2703,12 @@ class NativeDashboard(QWidget):
         self._watch(future, apply, label="刷新账号选项", silent=True)
 
     def _apply_job_account_platform(self) -> None:
-        platform_key = self.job_account_platform.currentData()
-        if not platform_key:
+        platform_keys = set(self.job_platforms.selected_values())
+        if not platform_keys:
             return
         rows = getattr(self, "_job_account_snapshots", [])
         target_accounts = {
-            row["account_id"] for row in rows if row.get("ai_platform", "doubao") == platform_key
+            row["account_id"] for row in rows if row.get("ai_platform", "doubao") in platform_keys
         }
         for index in range(self.job_accounts.list_widget.count()):
             item = self.job_accounts.list_widget.item(index)
@@ -2877,12 +2893,19 @@ class NativeDashboard(QWidget):
               color: #29314f;
               font-weight: 750;
             }
-            QLineEdit, QTextEdit, QSpinBox, QDateEdit, QComboBox {
+            QLineEdit, QSpinBox, QDateEdit, QComboBox {
               background: #ffffff;
               border: 1px solid #d8dfeb;
               border-radius: 8px;
               padding: 8px;
               min-height: 20px;
+              selection-background-color: #6264df;
+            }
+            QTextEdit {
+              background: #ffffff;
+              border: 1px solid #d8dfeb;
+              border-radius: 8px;
+              padding: 8px;
               selection-background-color: #6264df;
             }
             QLineEdit:focus, QTextEdit:focus, QSpinBox:focus,
@@ -3169,23 +3192,27 @@ class NativeDashboard(QWidget):
         table.setRowCount(len(templates))
         for row, template in enumerate(templates):
             table.setItem(row, 0, QTableWidgetItem(str(template.get("name", ""))))
+            platform_names = "、".join(
+                get_platform(key).name for key in template.get("ai_platforms", ["doubao"])
+            )
+            table.setItem(row, 1, QTableWidgetItem(platform_names))
             keywords = template.get("keywords", [])
             count_item = QTableWidgetItem(str(len(keywords)))
             count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            table.setItem(row, 1, count_item)
-            table.setItem(row, 2, QTableWidgetItem(str(template.get("prompt_template", ""))))
+            table.setItem(row, 2, count_item)
+            table.setItem(row, 3, QTableWidgetItem(str(template.get("prompt_template", ""))))
 
             edit_button = QPushButton("编辑")
             edit_button.setObjectName("secondaryButton")
             edit_button.clicked.connect(lambda _, tid=template["id"]: self.edit_job_template(tid))
-            table.setCellWidget(row, 3, edit_button)
+            table.setCellWidget(row, 4, edit_button)
 
             delete_button = QPushButton("删除")
             delete_button.setObjectName("dangerButton")
             delete_button.clicked.connect(
                 lambda _, tid=template["id"]: self.delete_job_template(tid)
             )
-            table.setCellWidget(row, 4, delete_button)
+            table.setCellWidget(row, 5, delete_button)
 
     def _refresh_schedules_table(self, schedules: list[dict[str, Any]]) -> None:
         table = self.schedules_table
@@ -3234,6 +3261,7 @@ class NativeDashboard(QWidget):
         interval_seconds = self.template_interval_seconds.value()
         account_cooldown_seconds = self.template_account_cooldown_seconds.value()
         max_attempts = self.template_max_attempts.value()
+        ai_platforms = self.template_platforms.selected_values() or ["doubao"]
 
         def save() -> dict[str, Any]:
             if self.editing_template_id:
@@ -3245,6 +3273,7 @@ class NativeDashboard(QWidget):
                     interval_seconds=interval_seconds,
                     account_cooldown_seconds=account_cooldown_seconds,
                     max_attempts=max_attempts,
+                    ai_platforms=ai_platforms,
                 )
             return self.backend.research_store.create_job_template(
                 name=name,
@@ -3253,6 +3282,7 @@ class NativeDashboard(QWidget):
                 interval_seconds=interval_seconds,
                 account_cooldown_seconds=account_cooldown_seconds,
                 max_attempts=max_attempts,
+                ai_platforms=ai_platforms,
             )
 
         future = self.backend.call(save)
@@ -3281,6 +3311,9 @@ class NativeDashboard(QWidget):
                 int(template.get("account_cooldown_seconds", 0))
             )
             self.template_max_attempts.setValue(int(template.get("max_attempts", 2)))
+            self.template_platforms.set_selected_values(
+                list(template.get("ai_platforms", ["doubao"]))
+            )
             self.template_save_button.setText("更新模板")
 
         self._watch(future, apply, label="读取任务模板")
@@ -3362,17 +3395,18 @@ class NativeDashboard(QWidget):
         if not self._ensure_backend_ready("立即执行计划"):
             return
 
-        def run() -> dict[str, Any]:
-            return self.backend.research_store.create_job_from_schedule(schedule_id)
+        def run() -> list[dict[str, Any]]:
+            return self.backend.research_store.create_jobs_from_schedule(schedule_id)
 
         future = self.backend.call(run)
 
-        def apply(job: dict[str, Any]) -> None:
-            task_count = len(job.get("tasks", []))
+        def apply(jobs: list[dict[str, Any]]) -> None:
+            task_count = sum(len(job.get("tasks", [])) for job in jobs)
+            names = "\n".join(job.get("name", "") for job in jobs)
             QMessageBox.information(
                 self,
                 "已触发",
-                f"已按模板最新配置生成采集任务：{job.get('name', '')}\n共 {task_count} 个关键词",
+                f"已按模板最新配置生成 {len(jobs)} 个采集任务：\n{names}\n共 {task_count} 个关键词",
             )
             self.backend.scheduler.wake()
 
@@ -3619,21 +3653,28 @@ class NativeDashboard(QWidget):
         if "{keyword}" not in template:
             QMessageBox.warning(self, "模板无效", "提问模板必须包含 {keyword}")
             return
+        platforms = self.job_platforms.selected_values() or [
+            platform.key for platform in list_platforms()
+        ]
+        platform_names = [get_platform(key).name for key in platforms]
 
-        def create_and_wake() -> dict[str, Any]:
-            job = self.backend.research_store.create_job(
-                name=self.job_name.text(),
-                keywords=keywords,
-                account_ids=self.job_accounts.selected_values(),
-                prompt_template=template,
-                scheduled_at=None,
-                interval_seconds=self.interval_seconds.value(),
-                account_cooldown_seconds=0,
-                max_attempts=self.max_attempts.value(),
-                ai_platform=self.job_platform.currentData(),
-            )
+        def create_and_wake() -> list[dict[str, Any]]:
+            jobs = [
+                self.backend.research_store.create_job(
+                    name=self.job_name.text(),
+                    keywords=keywords,
+                    account_ids=self.job_accounts.selected_values(),
+                    prompt_template=template,
+                    scheduled_at=None,
+                    interval_seconds=self.interval_seconds.value(),
+                    account_cooldown_seconds=0,
+                    max_attempts=self.max_attempts.value(),
+                    ai_platform=platform_key,
+                )
+                for platform_key in platforms
+            ]
             self.backend.scheduler.wake()
-            return job
+            return jobs
 
         future = self.backend.call(create_and_wake)
 
@@ -3641,12 +3682,13 @@ class NativeDashboard(QWidget):
             self.keywords.clear()
             self.job_name.clear()
             self.job_accounts.clear_selection()
-            self.job_account_platform.setCurrentIndex(0)
+            self.job_platforms.clear_selection()
             self.refresh_jobs()
             QMessageBox.information(
                 self,
                 "采集任务",
-                "任务已启动，系统会自动调度选中的可用账号。",
+                f"已创建 {len(platforms)} 个任务（{'、'.join(platform_names)}），"
+                "系统会自动调度选中的可用账号。",
             )
 
         self._watch(future, completed)

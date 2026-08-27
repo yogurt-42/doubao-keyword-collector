@@ -189,6 +189,9 @@
             <label>使用账号</label>
             <div id="accountChecks" class="checks"><span class="meta">正在读取账号…</span></div>
             <p class="hint">未勾选时自动轮询所有已登录账号。每个账号使用软件内的独立浏览器标签页和独立数据目录。</p>
+            <label>AI 平台</label>
+            <div id="platformChecks" class="checks"><span class="meta">正在读取平台…</span></div>
+            <p class="hint">未勾选时默认使用全部平台；勾选多个平台会按平台拆分生成多个任务。</p>
             <div class="row three">
               <div><label for="intervalSeconds">每次采集间隔（秒）</label><input id="intervalSeconds" type="number" min="1" max="86400" value="10"></div>
               <div><label for="maxAttempts">失败尝试次数</label><select id="maxAttempts"><option>1</option><option selected>2</option><option>3</option></select></div>
@@ -429,14 +432,16 @@
             <div><label for="tplAttempts">尝试次数</label><select id="tplAttempts"><option>1</option><option selected>2</option><option>3</option></select></div>
           </div>
           <div style="margin-top:10px"><label for="tplPrompt">提问模板</label><input id="tplPrompt" value="{keyword}"></div>
+          <div style="margin-top:10px"><label>AI 平台</label><div id="tplPlatforms" class="checks"></div>
+            <p class="hint">勾选多个平台时，计划触发会按平台拆分生成多个任务。</p></div>
           <div class="actions">
             <button class="btn primary" id="saveTemplate">保存模板</button>
             <button class="btn" id="resetTemplateForm" style="display:none">取消编辑</button>
           </div>
           <div class="tablewrap" style="margin-top:16px">
             <table>
-              <thead><tr><th>名称</th><th>关键词数</th><th>间隔</th><th>操作</th></tr></thead>
-              <tbody id="templateRows"><tr><td colspan="4" class="empty">暂无模板</td></tr></tbody>
+              <thead><tr><th>名称</th><th>平台</th><th>关键词数</th><th>间隔</th><th>操作</th></tr></thead>
+              <tbody id="templateRows"><tr><td colspan="5" class="empty">暂无模板</td></tr></tbody>
             </table>
           </div>
         </div>
@@ -528,6 +533,26 @@
       if (tab.dataset.page === 'accounts') loadAccounts();
     }));
 
+    let platformOptions = [];
+    const platformName = key => (platformOptions.find(p => p.key === key) || {}).name || key;
+
+    async function loadPlatformOptions() {
+      try {
+        const data = await api('/admin/api/config');
+        platformOptions = data.ai_platforms || [];
+        $('platformChecks').innerHTML = platformOptions.map(p => `
+          <label class="check"><input type="checkbox" value="${escapeHtml(p.key)}">
+            ${escapeHtml(p.name)}
+          </label>`).join('') || '<span class="meta">暂无平台</span>';
+        const tplSelected = [...$('tplPlatforms').querySelectorAll('input:checked')].map(i => i.value);
+        $('tplPlatforms').innerHTML = platformOptions.map(p => `
+          <label class="check"><input type="checkbox" value="${escapeHtml(p.key)}"
+            ${(tplSelected.length ? tplSelected : ['doubao']).includes(p.key) ? 'checked' : ''}>
+            ${escapeHtml(p.name)}
+          </label>`).join('') || '<span class="meta">暂无平台</span>';
+      } catch (error) { toast(error.message, true); }
+    }
+
     async function loadAccounts() {
       try {
         const data = await api('/admin/api/accounts');
@@ -594,9 +619,11 @@
       const keywords = $('keywords').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
       if (!keywords.length) return toast('请填写或导入关键词', true);
       const account_ids = [...$('accountChecks').querySelectorAll('input:checked')].map(item => item.value);
+      const checked_platforms = [...$('platformChecks').querySelectorAll('input:checked')].map(item => item.value);
+      const ai_platforms = checked_platforms.length ? checked_platforms : platformOptions.map(p => p.key);
       const scheduled = $('scheduleAt').value;
       const body = {
-        name: $('jobName').value.trim(), keywords, account_ids,
+        name: $('jobName').value.trim(), keywords, account_ids, ai_platforms,
         scheduled_at: scheduled ? new Date(scheduled).toISOString() : null,
         interval_seconds: Math.round(Number($('intervalSeconds').value)),
         account_cooldown_seconds: 0,
@@ -604,10 +631,11 @@
         prompt_template: $('promptTemplate').value
       };
       try {
-        await postJSON('/admin/api/research/jobs', body);
+        const data = await postJSON('/admin/api/research/jobs', body);
         $('keywords').value = ''; $('jobName').value = ''; $('keywordFile').value = '';
         $('fileState').textContent = '支持 .xlsx、.csv、.tsv';
-        toast('采集任务已创建'); await loadJobs();
+        const count = data.count || 1;
+        toast(count > 1 ? `已按平台拆分创建 ${count} 个采集任务` : '采集任务已创建'); await loadJobs();
       } catch (error) { toast(error.message, true); }
     });
 
@@ -1062,13 +1090,14 @@
         $('templateRows').innerHTML = templates.templates.map(t => `
           <tr>
             <td>${escapeHtml(t.name || '未命名')}</td>
+            <td>${escapeHtml((t.ai_platforms || ['doubao']).map(platformName).join('、'))}</td>
             <td>${(t.keywords || []).length}</td>
             <td>${t.interval_seconds}s</td>
             <td class="actions">
               <button class="btn small" onclick="editTemplate('${escapeHtml(t.id)}')">编辑</button>
               <button class="btn small danger" onclick="deleteTemplate('${escapeHtml(t.id)}')">删除</button>
             </td>
-          </tr>`).join('') || '<tr><td colspan="4" class="empty">暂无模板</td></tr>';
+          </tr>`).join('') || '<tr><td colspan="5" class="empty">暂无模板</td></tr>';
 
         const typeLabels = {interval: '间隔', once: '一次性', daily: '每日'};
         $('scheduleRows').innerHTML = schedules.schedules.map(s => {
@@ -1092,6 +1121,7 @@
     }
 
     function templateFormBody() {
+      const checked = [...$('tplPlatforms').querySelectorAll('input:checked')].map(i => i.value);
       return {
         name: $('tplName').value.trim(),
         keywords: $('tplKeywords').value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
@@ -1099,6 +1129,7 @@
         interval_seconds: Number($('tplInterval').value),
         account_cooldown_seconds: Number($('tplCooldown').value),
         max_attempts: Number($('tplAttempts').value),
+        ai_platforms: checked.length ? checked : ['doubao'],
       };
     }
     $('saveTemplate').addEventListener('click', async () => {
@@ -1121,6 +1152,7 @@
       editingTemplateId = null;
       $('tplName').value = ''; $('tplKeywords').value = ''; $('tplPrompt').value = '{keyword}';
       $('tplInterval').value = '10'; $('tplCooldown').value = '0'; $('tplAttempts').value = '2';
+      $('tplPlatforms').querySelectorAll('input').forEach(i => { i.checked = i.value === 'doubao'; });
       $('saveTemplate').textContent = '保存模板'; $('resetTemplateForm').style.display = 'none';
     }
     window.editTemplate = async id => {
@@ -1133,6 +1165,8 @@
         $('tplInterval').value = data.interval_seconds;
         $('tplCooldown').value = data.account_cooldown_seconds;
         $('tplAttempts').value = data.max_attempts;
+        const tplPlatforms = data.ai_platforms || ['doubao'];
+        $('tplPlatforms').querySelectorAll('input').forEach(i => { i.checked = tplPlatforms.includes(i.value); });
         $('saveTemplate').textContent = '更新模板'; $('resetTemplateForm').style.display = '';
       } catch (error) { toast(error.message, true); }
     };
@@ -1186,7 +1220,9 @@
     window.runScheduleNow = async id => {
       try {
         const data = await postJSON(`/admin/api/research/schedules/${id}/run`);
-        toast(`计划已执行，生成任务：${data.name || ''}`); await loadSchedules(); await loadJobs();
+        const count = data.count || 1;
+        toast(count > 1 ? `计划已执行，按平台拆分生成 ${count} 个任务` : `计划已执行，生成任务：${data.name || ''}`);
+        await loadSchedules(); await loadJobs();
       } catch (error) { toast(error.message, true); }
     };
     window.deleteSchedule = async id => {
@@ -1203,7 +1239,7 @@
       } catch (error) { toast(error.message, true); }
     });
 
-    Promise.all([loadAccounts(), loadJobs(), loadResults()]);
+    Promise.all([loadAccounts(), loadJobs(), loadResults(), loadPlatformOptions()]);
     setInterval(() => { loadJobs(); loadAccounts(); }, 5000);
   </script>
 </body>

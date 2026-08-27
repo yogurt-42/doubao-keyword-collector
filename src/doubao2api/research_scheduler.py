@@ -143,11 +143,11 @@ class ResearchScheduler:
             if self._stopping:
                 break
             try:
-                job = self.store.create_job_from_schedule(schedule["id"])
+                jobs = self.store.create_jobs_from_schedule(schedule["id"])
                 next_run_at = _compute_next_run(
                     schedule["schedule_type"], schedule["schedule_value"]
                 )
-                self.store.advance_schedule(schedule["id"], job["id"], next_run_at)
+                self.store.advance_schedule(schedule["id"], jobs[0]["id"], next_run_at)
                 if schedule["schedule_type"] == "once":
                     self.store.toggle_schedule(schedule["id"], False)
                 triggered = True

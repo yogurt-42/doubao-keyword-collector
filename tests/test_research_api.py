@@ -192,6 +192,88 @@ def test_job_rename_and_delete(tmp_path: Path) -> None:
         assert missing.status_code == 404
 
 
+def test_create_job_with_multiple_platforms(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        created = client.post(
+            "/admin/api/research/jobs",
+            json={
+                "name": "多平台任务",
+                "keywords": ["关键词 A"],
+                "ai_platforms": ["doubao", "deepseek"],
+            },
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        assert payload["count"] == 2
+        assert {job["ai_platform"] for job in payload["jobs"]} == {"doubao", "deepseek"}
+
+
+def test_create_job_with_single_platform_keeps_old_shape(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        created = client.post(
+            "/admin/api/research/jobs",
+            json={
+                "name": "单平台任务",
+                "keywords": ["关键词 A"],
+                "ai_platforms": ["deepseek"],
+            },
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        assert payload["ai_platform"] == "deepseek"
+        assert payload["id"]
+
+
+def test_create_job_legacy_ai_platform_field(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        created = client.post(
+            "/admin/api/research/jobs",
+            json={
+                "name": "旧客户端任务",
+                "keywords": ["关键词 A"],
+                "ai_platform": "deepseek",
+            },
+        )
+        assert created.status_code == 200
+        assert created.json()["ai_platform"] == "deepseek"
+
+        defaulted = client.post(
+            "/admin/api/research/jobs",
+            json={"name": "默认平台任务", "keywords": ["关键词 A"]},
+        )
+        assert defaulted.status_code == 200
+        assert defaulted.json()["ai_platform"] == "doubao"
+
+
+def test_template_with_multiple_platforms(tmp_path: Path) -> None:
+    with make_client(tmp_path) as client:
+        created = client.post(
+            "/admin/api/research/templates",
+            json={
+                "name": "多平台模板",
+                "keywords": ["关键词 A"],
+                "ai_platforms": ["doubao", "deepseek"],
+            },
+        )
+        assert created.status_code == 200
+        template = created.json()
+        assert template["ai_platforms"] == ["doubao", "deepseek"]
+
+        fetched = client.get(f"/admin/api/research/templates/{template['id']}")
+        assert fetched.json()["ai_platforms"] == ["doubao", "deepseek"]
+
+        updated = client.post(
+            f"/admin/api/research/templates/{template['id']}",
+            json={
+                "name": "多平台模板",
+                "keywords": ["关键词 A"],
+                "ai_platforms": ["deepseek"],
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.json()["ai_platforms"] == ["deepseek"]
+
+
 def test_sync_platform_info(tmp_path: Path) -> None:
     unique_domain = f"test-{uuid4().hex}.local"
     unique_link = f"https://{unique_domain}/report"

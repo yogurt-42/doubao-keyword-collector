@@ -271,6 +271,72 @@ class TestScheduleExecution:
             store.get_schedule(schedule["id"])
 
 
+class TestTemplatePlatforms:
+    def test_template_defaults_to_doubao(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        template = _create_template(store)
+        assert template["ai_platforms"] == ["doubao"]
+
+    def test_template_saves_multiple_platforms(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        template = _create_template(store, ai_platforms=["doubao", "deepseek"])
+        assert template["ai_platforms"] == ["doubao", "deepseek"]
+        assert store.get_job_template(template["id"])["ai_platforms"] == [
+            "doubao",
+            "deepseek",
+        ]
+
+    def test_update_template_platforms(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        template = _create_template(store)
+        updated = store.update_job_template(
+            template["id"],
+            name="测试模板",
+            keywords=["关键词 A"],
+            prompt_template="调研 {keyword}",
+            interval_seconds=10,
+            account_cooldown_seconds=0,
+            max_attempts=2,
+            ai_platforms=["deepseek"],
+        )
+        assert updated["ai_platforms"] == ["deepseek"]
+
+    def test_create_jobs_from_schedule_splits_platforms(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        template = _create_template(store, ai_platforms=["doubao", "deepseek"])
+        schedule = _create_schedule(store, template["id"])
+
+        jobs = store.create_jobs_from_schedule(schedule["id"])
+
+        assert len(jobs) == 2
+        assert {job["ai_platform"] for job in jobs} == {"doubao", "deepseek"}
+        for job in jobs:
+            assert job["tasks"], "每个平台任务都应包含关键词任务"
+
+    def test_create_job_from_schedule_returns_first_job(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        template = _create_template(store, ai_platforms=["doubao", "deepseek"])
+        schedule = _create_schedule(store, template["id"])
+
+        job = store.create_job_from_schedule(schedule["id"])
+
+        assert job["ai_platform"] == "doubao"
+
+    def test_legacy_template_without_platforms_defaults_to_doubao(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        db_path = tmp_path / "research.sqlite3"
+        store = ResearchStore(db_path)
+        template = _create_template(store)
+        # 模拟旧版本数据库：模板行没有平台信息
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "UPDATE research_job_templates SET ai_platforms_json = '' WHERE id = ?",
+                (template["id"],),
+            )
+        assert store.get_job_template(template["id"])["ai_platforms"] == ["doubao"]
+
+
 class TestSchedulerIntegration:
     def test_check_schedules_triggers_due_schedule(self, tmp_path: Path) -> None:
         import asyncio
