@@ -108,6 +108,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 - `Settings`（`src/doubao2api/config.py`）：用户持久化配置。
   - `default_account_id`、`auto_start_all_accounts`、各类别/配额设置。
   - `account_tab_hidden: dict[str, bool]`：账号标签显示/隐藏状态，默认显示。
+  - `account_startup_states: dict[str, dict]`：记忆化账号启动状态（`started`/`hidden`），退出时逐账号记录，下次启动据此自动恢复。
 - `RuntimeConfig`：运行时环境配置（host/port/headless/browser 等）。
 - `SettingsStore`：将 `Settings` 读写为 `%LOCALAPPDATA%\DoubaoAccountManager\settings.json`。
 
@@ -120,6 +121,7 @@ D:\ai-source-capturer\doubao-keyword-collector
   - `discover_account_ids(platform=...)`：扫描 `accounts/` 目录发现账号，可按平台过滤。
   - `start_account()` / `stop_account()`：启动/停止浏览器。
   - `snapshots()`：并发获取所有账号状态，使用 `asyncio.Semaphore(3)` 限制同时检测数量，支持失败退避。
+  - `_update_startup_state()`：启动/停止/隐藏账号时同步 `settings.account_startup_states`，供下次启动恢复；`account_browser_config` / `get_account_platform` 带文件 mtime + 短 TTL 缓存，避免频繁读盘。
   - `set_category()` / `is_tab_hidden()` / `set_tab_hidden()` / `rename_account()` / `delete_account()`：账号元数据维护。
 - 桌面模式下，客户端实例由 `desktop.py` 的 `client_factory` 创建为 `EmbeddedBrowserClient`；命令行/服务端使用 `BrowserClient`。
 
@@ -161,8 +163,8 @@ D:\ai-source-capturer\doubao-keyword-collector
     - 按任务 `ai_platform` 选择同平台账号。
     - 调用 `account.client.chat(..., reference_callback=save_reference)`。
     - 异常时根据类型暂停账号或重试任务。
-  - 账号选择逻辑：只选择 `ai_platform` 与任务匹配的账号；跳过 `busy_accounts`、跳过 `paused_until` 未到期的账号、检测登录/验证码/聊天就绪状态。**未启动的账号只有在 `Settings.auto_start_all_accounts=True` 时才会被自动启动，否则跳过。**
-  - `_check_schedules()`：在 `_dispatch_due_tasks()` 之前检查到期的 `research_schedules`，按模板最新配置生成一次性 `research_jobs` 并推进下一次执行时间。
+  - 账号选择逻辑：只选择 `ai_platform` 与任务匹配的账号；跳过 `busy_accounts`、跳过 `paused_until` 未到期的账号、检测登录/验证码/聊天就绪状态。**派发任务时会自动拉起未启动的账号**（`start_account`），不再依赖 `auto_start_all_accounts` 开关。
+  - `_check_schedules()`：在 `_dispatch_due_tasks()` 之前检查到期的 `research_schedules`，按模板最新配置生成一次性 `research_jobs`（模板含多个 `ai_platforms` 时按平台拆分生成多个 job）并推进下一次执行时间。
 
 ### 5.5 数据层：`research_store.py`
 
@@ -175,18 +177,19 @@ D:\ai-source-capturer\doubao-keyword-collector
     - `research_tasks`：每个关键词一次执行（job_id、keyword、status、scheduled_at、account_id、attempt_count、result_count）。
     - `research_results`：采集到的每条链接（job_id、task_id、keyword、link、platform、platform_type、account_id、collected_at/date、title、**ai_platform**）。
     - `account_runtime`：账号使用/暂停状态。
-    - `research_job_templates`：任务模板（name、keywords_json、prompt_template、interval_seconds、account_cooldown_seconds、max_attempts）。
+    - `research_job_templates`：任务模板（name、keywords_json、prompt_template、interval_seconds、account_cooldown_seconds、max_attempts、**ai_platforms_json**）。
     - `research_schedules`：触发计划（name、template_id、enabled、schedule_type、schedule_value、next_run_at、run_count、last_job_id）。
   - 核心方法：
     - `create_job()` / `list_jobs()` / `get_job()` / `set_job_status()` / `rename_job()` / `delete_job()`。
     - `due_tasks()` / `mark_task_running()` / `complete_task()` / `fail_or_retry_task()`。
     - `add_result()`：实时写入单条链接。
-    - 任务模板：`create_job_template()` / `list_job_templates()` / `get_job_template()` / `update_job_template()` / `delete_job_template()`。
-    - 触发计划：`create_schedule()` / `list_schedules()` / `get_schedule()` / `update_schedule()` / `toggle_schedule()` / `delete_schedule()` / `due_schedules()` / `create_job_from_schedule()` / `advance_schedule()`。
+    - 任务模板：`create_job_template()` / `list_job_templates()` / `get_job_template()` / `update_job_template()` / `delete_job_template()`（均支持 `ai_platforms` 多平台，旧数据默认 `["doubao"]`）。
+    - 触发计划：`create_schedule()` / `list_schedules()` / `get_schedule()` / `update_schedule()` / `toggle_schedule()` / `delete_schedule()` / `due_schedules()` / `create_jobs_from_schedule()`（按模板平台拆分为多个 job；`create_job_from_schedule()` 保留为兼容包装，返回第一个）/ `advance_schedule()`。
     - `result_dashboard()` / `source_comparison()` / `list_results()`：筛选与聚合。
     - `sync_platform_info()`：按最新规则回填缺失的 `platform_type`。
     - `long_tail_analysis()`：按平台聚合频次、关键词覆盖广度、密度，返回四象限分类与代表性链接/域名。
     - `rename_account_references()` / `remove_account_references()`：账号重命名/删除时同步数据库引用。
+  - 查询缓存：`list_results` / `result_dashboard` / `long_tail_analysis` / `source_comparison` 等重聚合查询带秒级 TTL 内存缓存（`_cached`），写操作统一 `_invalidate_cache()` 失效。
 
 ### 5.6 长尾信源分析
 
@@ -271,14 +274,15 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 - `NativeDashboard`
   - 内部 `QTabWidget` 包含 8 个页签：新建采集、账号环境、历史任务、采集结果、长尾信源、信源对比、平台信息、定时任务。
-  - `DesktopBackend` 提供账号池、调度器、数据存储。
-  - 3 秒通用定时刷新；当当前页签为“账号环境”时刷新间隔降到 10 秒，减少账号快照开销。
+  - `DesktopBackend` 提供账号池、调度器、数据存储；后台线程**非阻塞初始化**（`is_ready()` / `has_start_error()`），UI 先显示、引擎就绪后再放开任务创建。
+  - 3 秒通用定时刷新（只刷当前可见页签）；当当前页签为“账号环境”时刷新间隔降到 10 秒，减少账号快照开销。
   - 结果页/信源对比页仍按需刷新。
   - 关键方法：
     - `_build_tasks_page()` / `_build_accounts_page()` / `_build_history_page()` / `_build_results_page()` / `_build_long_tail_page()` / `_build_comparison_page()` / `_build_platforms_page()` / `_build_schedules_page()`。
     - `refresh_accounts()` / `refresh_jobs()` / `refresh_history()` / `refresh_results()` / `refresh_long_tail_options()` / `refresh_source_comparison()` / `refresh_platforms()` / `refresh_schedules_page()`。
-    - `create_job()`：读取表单 → `research_store.create_job()` → `scheduler.wake()`。
-    - `save_job_template()` / `edit_job_template()` / `delete_job_template()`：任务模板 CRUD。
+    - `create_job()`：读取表单 → 对每个勾选的平台调用 `research_store.create_job()` → `scheduler.wake()`；账号选择随平台勾选自动筛选（`_apply_job_account_platform()`）。
+    - `restore_account_sessions()`：启动后按 `settings.account_startup_states` 恢复上次退出时启动/隐藏的账号。
+    - `save_job_template()` / `edit_job_template()` / `delete_job_template()`：任务模板 CRUD（含平台多选）。
     - `create_schedule()` / `toggle_schedule()` / `delete_schedule()` / `run_schedule_now()`：触发计划管理。
     - `analyze_long_tail()`：按筛选范围和阈值计算四象限并渲染 matplotlib 气泡图。
     - `export_job_results()`：历史任务行内导出 Excel。
@@ -286,7 +290,7 @@ D:\ai-source-capturer\doubao-keyword-collector
     - `sync_platform_info()`：按最新规则回填历史记录平台类型。
 - `SourceDistributionChart`：自定义 QPainter 甜甜圈图 + 平台列表。
 - `LongTailChart`：基于 matplotlib 的气泡四象限图，支持悬停提示、X/Y 对数刻度。
-- `MultiSelectFilter`：带搜索、全选/清空的关键词下拉多选。
+- `MultiSelectFilter`：带搜索、全选/清空的多选下拉（关键词/平台/账号等，支持 `selection_unit` 自定义）。
 
 ### 5.14 Web 界面：`static/index.html`
 
@@ -302,7 +306,7 @@ D:\ai-source-capturer\doubao-keyword-collector
   - `/admin/api/...`：管理后台接口（账号、任务、结果、设置、Cookie）。
   - `/admin`：返回 `static/index.html`。
 - 关键接口：
-  - `POST /admin/api/research/jobs`：创建采集任务。
+  - `POST /admin/api/research/jobs`：创建采集任务；`ai_platforms` 数组多平台时按平台拆分（返回 `{jobs, count}`），单平台保持原返回结构，兼容旧 `ai_platform` 单值字段。
   - `GET /admin/api/research/jobs`：任务列表 + 调度器快照。
   - `POST /admin/api/research/jobs/{id}/pause|resume|cancel`。
   - `DELETE /admin/api/research/jobs/{id}`：删除历史任务。
@@ -347,7 +351,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 research_jobs (
     id, name, prompt_template, status, scheduled_at,
     interval_seconds, account_cooldown_seconds, max_attempts,
-    account_ids_json, created_at, started_at, finished_at, last_error
+    account_ids_json, ai_platform, created_at, started_at, finished_at, last_error
 )
 
 research_tasks (
@@ -368,7 +372,7 @@ account_runtime (
 research_job_templates (
     id, name, keywords_json, prompt_template,
     interval_seconds, account_cooldown_seconds, max_attempts,
-    created_at, updated_at
+    ai_platforms_json, created_at, updated_at
 )
 
 research_schedules (
@@ -392,14 +396,14 @@ research_schedules (
 
 ### 7.1 创建任务到执行
 
-1. UI：`create_job()` 收集关键词、prompt、账号、间隔、重试次数。
+1. UI：`create_job()` 收集关键词、prompt、账号、间隔、重试次数；AI 平台为多选，**每个勾选的平台独立调用一次 `create_job()`**，任务名自动带平台名（`关键词-平台-日期`）区分。
 2. `ResearchStore.create_job()`：
    - 插入 `research_jobs`（status=running）。
    - 每个关键词生成一条 `research_tasks`（status=pending，scheduled_at 按间隔递增）。
 3. `scheduler.wake()` 触发调度循环。
 4. `ResearchScheduler._dispatch_due_tasks()`：
    - 查询 `due_tasks()`。
-   - 为每个 task 选账号 → `mark_task_running()` → 创建 asyncio worker。
+   - 为每个 task 选同平台可用账号（未启动的账号自动拉起）→ `mark_task_running()` → 创建 asyncio worker。
 5. `ResearchScheduler._run_task()`：
    - 替换 prompt 中的 `{keyword}`。
    - 调用 `client.chat(..., reference_callback=save_reference)`。

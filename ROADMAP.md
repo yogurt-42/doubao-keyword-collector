@@ -1,7 +1,7 @@
 # 开发路线图
 
 > 记录已完成大事记与下一阶段计划。
-> 最近一次更新：2026-08-21
+> 最近一次更新：2026-08-27
 
 ---
 
@@ -31,6 +31,12 @@
 | 20 | 豆包新布局兼容：适配 `contenteditable` 输入框与新版参考资料展开按钮 | `selectors.py`, `embedded_browser_client.py` |
 | 21 | Windows 自替换 updater：便携版目录替换、单文件 exe 替换、独立 helper、备份回滚 | `update_installer.py`, `update_installer_helper.py`, `native_dashboard.py`, 打包脚本 |
 | 22 | **多平台采集架构（v1.1.0）**：新增 `platforms/` 包抽象 `AIPlatform`；接入 DeepSeek；账号/任务绑定 AI 平台；调度器按平台过滤；导出增加“AI 平台”列；桌面端与命令行端浏览器客户端全面平台化 | `platforms/`, `account_manager.py`, `research_scheduler.py`, `research_store.py`, `research_export.py`, `native_dashboard.py`, `server.py`, `models.py`, `embedded_browser_client.py`, `browser_client.py`, `cookie_utils.py`, `research_links.py`, `desktop.py`, `windows_entry.py`, `__main__.py`, `config.py` |
+| 23 | 任务名自动生成优化（首个关键词-平台-日期）与信源对比体验优化 | `native_dashboard.py`, `research_store.py`, `static/index.html` |
+| 24 | 长尾信源页支持平台/账号多选筛选 + 参数说明优化 | `native_dashboard.py`, `research_store.py`, `models.py`, `server.py`, `static/index.html` |
+| 25 | 账号环境页按平台筛选 + `MultiSelectFilter` 单位自定义 | `native_dashboard.py`, `account_manager.py`, `config.py`, `desktop.py` |
+| 26 | 更新下载支持断点续传与 30 分钟卡住检测 | `update_checker.py`, `config.py`, `native_dashboard.py` |
+| 27 | 桌面端加载速度优化（SQLite 索引、聚合查询缓存、非阻塞后端初始化）+ 记忆化账号启动/隐藏状态恢复 + 调度器自动拉起未启动账号 | `research_store.py`, `account_manager.py`, `config.py`, `native_dashboard.py`, `research_scheduler.py`, `desktop.py`, `windows_entry.py` |
+| 28 | 新建任务支持勾选平台自动生成多任务：桌面/Web 平台多选、按平台拆分创建、账号随平台自动筛选；定时任务模板支持多平台（`ai_platforms_json`）；API 兼容旧 `ai_platform` 字段 | `native_dashboard.py`, `research_store.py`, `research_scheduler.py`, `models.py`, `server.py`, `static/index.html` |
 
 > 各阶段技术细节参见 `CLAUDE.md` 与 `AI_REFERENCE.md`。
 
@@ -47,14 +53,10 @@
 | 任务 | 目标 | 主要文件 |
 |------|------|----------|
 | 更多 AI 平台 | 按 `platforms/` 模式接入 Kimi、通义千问等 | `platforms/` |
-| 模板/定时任务绑定平台 | `research_job_templates` 与 `research_schedules` 增加 `ai_platform` 列 | `research_store.py`, `models.py`, `native_dashboard.py`, `server.py` |
 | 平台响应捕获完善 | 实测并补充 DeepSeek 网络响应捕获模式 | `platforms/deepseek.py` |
 | 采集可观测性 | 在日志中记录每个任务的平台、账号、结果数、耗时 | `research_scheduler.py` |
 
 ---
-   - 通用：先清理已存在的 `.bak` 备份，只保留即将生成的最新一份。
-   - 便携版：解压新 zip 到临时目录 → 启动独立 helper → 原进程退出 → 将旧文件夹重命名为 `.bak` → 移入新文件夹 → 启动新 exe。
-   - 单文件版：确认新 exe 已下载到 `%TEMP%` → 启动独立 helper → 原进程退出 → 将旧 exe 重命名为 `.bak` → 移入新 exe → 启动新 exe。
 
 ### 风险与缓解
 
@@ -86,8 +88,8 @@
 
 | 层级 | 变更 |
 |------|------|
-| `Settings` (`config.py`) | 新增 `account_tab_hidden: dict[str, bool]`（账号标签显示/隐藏，已实现） |
-| SQLite | 已新增 `research_job_templates` 表、`research_schedules` 表；已新增 `idx_research_schedules_due`；已新增 `idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date` |
+| `Settings` (`config.py`) | 新增 `account_tab_hidden: dict[str, bool]`（账号标签显示/隐藏，已实现）；新增 `account_startup_states`（记忆化账号启动/隐藏状态，重启后自动恢复） |
+| SQLite | 已新增 `research_job_templates` 表、`research_schedules` 表；已新增 `idx_research_schedules_due`；已新增 `idx_research_tasks_job_status`、`idx_research_results_task`、`idx_research_results_job_date`；已新增 `research_job_templates.ai_platforms_json`（任务模板多平台）；已新增结果/任务/账号运行时多个查询索引 |
 
 ### API/UI 变更汇总
 

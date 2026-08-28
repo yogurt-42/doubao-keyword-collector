@@ -6,7 +6,7 @@
 
 ## 1. 项目定位
 
-**豆包关键词资料采集器** `v1.0.3`
+**豆包关键词资料采集器** `v1.1.0`
 
 本地优先的非官方 AI 关键词调研工具：管理多个 AI 平台账号（首发豆包，已扩展 DeepSeek），批量提问，自动展开回答中的“参考资料”区域，提取资料链接、平台名、平台类型，存入本地 SQLite，支持筛选、导出 Excel、信源对比、长尾信源分析。
 
@@ -96,14 +96,14 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 | 页签 | 主要功能 | 关键方法/文件 |
 |------|----------|---------------|
-| 新建采集 | 输入任务名、关键词、间隔、尝试次数、选择账号，创建任务 | `NativeDashboard.create_job()` |
-| 账号环境 | 创建/启动/关闭/重命名/删除账号，处理验证码恢复 | `refresh_accounts()` / `account_manager.py` |
+| 新建采集 | 输入任务名、关键词、间隔、尝试次数、勾选平台（多选自动拆分多任务）、选择账号，创建任务 | `NativeDashboard.create_job()` |
+| 账号环境 | 创建/启动/关闭/重命名/删除账号，按平台筛选，处理验证码恢复 | `refresh_accounts()` / `account_manager.py` |
 | 历史任务 | 查看已完成/失败任务，导出 Excel、重命名、删除、同步平台信息 | `refresh_history()` / `export_job_results()` / `rename_job()` / `sync_platform_info()` |
 | 采集结果 | 筛选结果、查看信源分布、导出 Excel | `refresh_results()` / `result_dashboard()` |
 | 长尾信源 | 按频次/广度/密度识别垂直长尾宝藏平台，气泡四象限图可视化，支持悬停、导出 Excel | `analyze_long_tail()` / `LongTailChart` |
 | 信源对比 | A/B 两个任务群对比平台来源变化 | `refresh_source_comparison()` |
 | 平台信息 | 查看当前平台规则库，导入 Excel 扩展 | `refresh_platforms()` / `platform_editor.add_entries()` |
-| 定时任务 | 任务模板 + 触发计划两层模型，支持按间隔/一次性/每日定时自动生成采集任务 | `refresh_schedules_page()` / `save_job_template()` / `create_schedule()` |
+| 定时任务 | 任务模板（支持多平台）+ 触发计划两层模型，支持按间隔/一次性/每日定时自动生成采集任务 | `refresh_schedules_page()` / `save_job_template()` / `create_schedule()` |
 
 ---
 
@@ -115,14 +115,14 @@ D:\ai-source-capturer\doubao-keyword-collector
 | `research_tasks` | 每个关键词一次执行 | `job_id`, `keyword`, `status`, `scheduled_at`, `account_id`, `attempt_count`, `result_count` |
 | `research_results` | 采集到的链接 | `job_id`, `task_id`, `keyword`, `link`, `platform`, `platform_type`, `account_id`, `collected_at/date`, `title`, `ai_platform` |
 | `account_runtime` | 账号使用/暂停状态 | `last_used_at`, `paused_until`, `pause_reason` |
-| `research_job_templates` | 任务模板（关键词、提问模板、间隔、尝试次数等） | `name`, `keywords_json`, `prompt_template`, `interval_seconds`, `account_cooldown_seconds`, `max_attempts` |
+| `research_job_templates` | 任务模板（关键词、提问模板、间隔、尝试次数、多平台等） | `name`, `keywords_json`, `prompt_template`, `interval_seconds`, `account_cooldown_seconds`, `max_attempts`, `ai_platforms_json` |
 | `research_schedules` | 触发计划（引用模板，按间隔/一次性/每日定时触发） | `name`, `template_id`, `enabled`, `schedule_type`, `schedule_value`, `next_run_at`, `run_count`, `last_job_id` |
 
 ---
 
 ## 8. 核心数据流（一句话）
 
-用户在 `native_dashboard.py` 创建任务（选择 AI 平台） → `research_store.py` 拆分为 `research_tasks` → `research_scheduler.py` 每 2 秒轮询并选同平台可用账号 → 浏览器客户端打开对应 AI 平台提问 → 展开参考资料 → 逐条回调保存到 `research_results` → UI 结果页/历史任务页读取并展示，导出时调用 `research_export.py` 生成 Excel。
+用户在 `native_dashboard.py` 创建任务（勾选 AI 平台，多平台自动拆分为多个任务） → `research_store.py` 拆分为 `research_tasks` → `research_scheduler.py` 每 2 秒轮询并选同平台可用账号（未启动的账号自动拉起） → 浏览器客户端打开对应 AI 平台提问 → 展开参考资料 → 逐条回调保存到 `research_results` → UI 结果页/历史任务页读取并展示，导出时调用 `research_export.py` 生成 Excel。
 
 ---
 
@@ -149,6 +149,12 @@ D:\ai-source-capturer\doubao-keyword-collector
 - 桌面端与命令行端浏览器客户端全面平台化，统一从 `AIPlatform` 读取 URL、选择器、Cookie 域名、API 捕获模式。
 - 导出 Excel 增加“AI 平台”列。
 - 应用内自动更新安装（Task 5）：实现 Windows 自替换 updater；便携版整体目录替换、单文件版 exe 替换；独立 `update_installer_helper.exe` 等待原进程退出后执行替换；旧版本保留为 `.bak` 以便手动回滚。
+- 任务名自动生成优化：默认 `首个关键词-平台-日期`，多平台任务自然区分；信源对比体验优化。
+- 长尾信源页支持平台/账号多选筛选；账号环境页支持按平台筛选；`MultiSelectFilter` 支持选择单位自定义。
+- 更新下载支持断点续传与 30 分钟卡住检测。
+- 桌面端加载速度优化：新增 7 个 SQLite 索引、重聚合查询秒级 TTL 缓存、账号配置/平台文件缓存、`DesktopBackend` 非阻塞初始化，控制台噪音日志统一屏蔽。
+- 记忆化账号启动：按用户最后退出时各账号的启动/隐藏状态自动恢复；调度器派发任务时自动拉起未启动账号，不再依赖 `auto_start_all_accounts`。
+- 新建任务支持勾选平台自动生成多任务：桌面/Web 平台多选、按平台拆分创建、账号随平台自动筛选；定时任务模板支持多平台（`ai_platforms_json`）；API 兼容旧 `ai_platform` 字段。
 
 ---
 
@@ -156,7 +162,7 @@ D:\ai-source-capturer\doubao-keyword-collector
 
 | 状态 | 内容 |
 |------|------|
-| ✅ 已完成 | 平台类型改造、平台信息管理、信源分布、信源对比、账号暂停/恢复、历史任务导出/重命名/同步平台信息、长尾信源分析、定时任务（Native/Web）、Web UI 与 Native 对齐、URL 匹配性能优化、账号标签显示/隐藏切换、Phase 3 性能优化专项、应用内检查更新（版本检查 + 页签 + API 退化/Release 页面 HTML 兜底）、应用内下载更新（双版本下载 + 校验 + 本地缓存）、豆包新布局兼容、Windows 自替换 updater |
+| ✅ 已完成 | 平台类型改造、平台信息管理、信源分布、信源对比、账号暂停/恢复、历史任务导出/重命名/同步平台信息、长尾信源分析、定时任务（Native/Web）、Web UI 与 Native 对齐、URL 匹配性能优化、账号标签显示/隐藏切换、Phase 3 性能优化专项、应用内检查更新（版本检查 + 页签 + API 退化/Release 页面 HTML 兜底）、应用内下载更新（双版本下载 + 校验 + 本地缓存 + 断点续传）、豆包新布局兼容、Windows 自替换 updater、多平台采集架构（豆包/DeepSeek）、桌面端加载速度优化（索引 + 缓存 + 非阻塞初始化）、记忆化账号启动/隐藏恢复 + 调度器自动拉起账号、新建任务勾选平台自动生成多任务（含定时任务模板多平台） |
 | 🚧 已规划 | （暂无） |
 
 ---

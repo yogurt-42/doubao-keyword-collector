@@ -1,4 +1,4 @@
-# 豆包关键词资料采集器 v1.0.3
+# 豆包关键词资料采集器 v1.1.0
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/yogurt-42/doubao-keyword-collector)
@@ -30,15 +30,16 @@
 | 功能 | 说明 |
 | --- | --- |
 | 多平台采集 | 已支持豆包、DeepSeek；账号与任务均绑定 AI 平台，后续可按相同方式扩展 |
-| 多账号调度 | 多账号轮询分配，同一账号一次只执行一个关键词，不同账号可并行 |
-| 桌面端标签 | 每个账号独立 Qt WebEngine 页签；支持隐藏/显示标签，隐藏后仍保持激活 |
+| 多平台任务 | 新建任务可勾选多个平台，一次创建自动按平台拆分为多个任务；定时任务模板同样支持 |
+| 多账号调度 | 多账号轮询分配，同一账号一次只执行一个关键词，不同账号可并行；任务派发时自动拉起未启动账号 |
+| 桌面端标签 | 每个账号独立 Qt WebEngine 页签；支持隐藏/显示标签，隐藏后仍保持激活；重启后按上次退出状态自动恢复 |
 | 自动采集 | 自动“新对话 → 填词 → 发送 → 等待回答 → 展开参考资料 → 保存链接” |
 | 实时保存 | 每识别一条参考资料立即写入 SQLite，不必等任务结束 |
-| 结果增强 | 信源分布 Top 20、信源对比（A/B 任务群）、长尾信源四象限分析 |
+| 结果增强 | 信源分布 Top 20、信源对比（A/B 任务群）、长尾信源四象限分析，均支持平台/账号多选筛选 |
 | 平台规则库 | URL → 平台名 → 平台类型映射，支持 Excel 导入扩展 |
 | 历史任务 | 查看、导出 Excel、重命名、删除、同步平台信息 |
 | 定时任务 | 任务模板 + 触发计划两层模型，支持按间隔/一次性/每日定时自动生成采集任务 |
-| 检查更新 | 应用内检查 GitHub Releases，支持下载单文件版 / 便携版并校验 |
+| 检查更新 | 应用内检查 GitHub Releases，支持下载单文件版 / 便携版并校验，支持断点续传 |
 | 风控保护 | 检测到验证码/人机验证时暂停账号 30 分钟，不绕过验证，等待人工处理 |
 
 ---
@@ -91,7 +92,7 @@ doubao-account-manager
 ## 📖 使用流程
 
 1. **账号登录**：进入“账号环境”，选择 AI 平台（豆包/DeepSeek），创建账号并在顶部页签中手动登录对应平台。
-2. **创建任务**：在“新建采集”选择 AI 平台，粘贴或导入关键词，设置采集间隔与尝试次数。
+2. **创建任务**：在“新建采集”勾选 AI 平台（可多选，每个平台自动拆分为独立任务），粘贴或导入关键词，设置采集间隔与尝试次数。
 3. **查看结果**：在“采集结果”筛选、查看信源分布，或导出 Excel。
 4. **深度分析**：使用“信源对比”比较两个任务群，或用“长尾信源”发现垂直平台。
 5. **管理规则**：在“平台信息”查看或导入 Excel 扩展 URL → 平台映射。
@@ -125,6 +126,7 @@ doubao-account-manager
 - 在“检查更新”页签可手动检查。
 - 显示最新版本号、发布时间、Release notes。
 - 支持分别下载“单文件版”与“便携版”，下载完成后做完整性校验（SHA256 或文件头兜底）。
+- 下载支持断点续传；30 分钟无进展会判定为卡住并提示重试。
 - 下载完成后显示本地文件路径，可打开所在文件夹或 Release 页面手动覆盖安装。
 
 GitHub API 被限流时会自动退化为读取 `/releases/latest` 的 302 跳转地址，并进一步解析 Release 页面 HTML 获取更新信息。
@@ -160,8 +162,11 @@ doubao-keyword-collector/
 │   ├── research_export.py        # Excel 导出
 │   ├── research_import.py        # 关键词导入
 │   ├── research_links.py         # 链接提取与平台归一化
+│   ├── platforms/                # AI 平台抽象与配置（豆包、DeepSeek）
 │   ├── selectors.py              # DOM 选择器与验证码文案
-│   ├── update_checker.py         # GitHub Releases 检查更新与下载
+│   ├── update_checker.py         # GitHub Releases 检查更新与下载（断点续传）
+│   ├── update_installer.py       # Windows 自替换更新安装
+│   ├── update_installer_helper.py# 更新替换独立辅助进程
 │   ├── server.py                 # FastAPI 接口
 │   ├── models.py                 # Pydantic 请求模型
 │   ├── config.py                 # 设置与运行时配置
