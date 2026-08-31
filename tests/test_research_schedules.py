@@ -362,3 +362,67 @@ class TestSchedulerIntegration:
         assert updated["run_count"] == 1
         assert updated["last_job_id"]
         assert updated["next_run_at"] > iso_now()
+
+
+class TestTemplateRepeatCount:
+    def test_template_defaults_to_single_round(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        template = _create_template(store)
+        assert template["repeat_count"] == 1
+
+    def test_template_saves_repeat_count(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        template = _create_template(store, repeat_count=3)
+        assert template["repeat_count"] == 3
+        assert store.get_job_template(template["id"])["repeat_count"] == 3
+
+    def test_template_rejects_out_of_range_repeat_count(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        with pytest.raises(ValueError, match="采集次数"):
+            _create_template(store, repeat_count=51)
+
+    def test_update_template_repeat_count(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        template = _create_template(store)
+        updated = store.update_job_template(
+            template["id"],
+            name="测试模板",
+            keywords=["关键词 A"],
+            prompt_template="调研 {keyword}",
+            interval_seconds=10,
+            account_cooldown_seconds=0,
+            max_attempts=2,
+            repeat_count=5,
+            round_interval_seconds=600,
+        )
+        assert updated["repeat_count"] == 5
+        assert updated["round_interval_seconds"] == 600
+
+    def test_template_rejects_out_of_range_round_interval(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        with pytest.raises(ValueError, match="轮次间等待时间"):
+            _create_template(store, repeat_count=2, round_interval_seconds=86401)
+
+    def test_schedule_triggered_job_expands_repeat_count(self, tmp_path: Path) -> None:
+        store = ResearchStore(tmp_path / "research.sqlite3")
+        template = _create_template(
+            store,
+            keywords=["关键词 A", "关键词 B"],
+            repeat_count=3,
+            round_interval_seconds=300,
+        )
+        schedule = _create_schedule(store, template["id"])
+
+        job = store.create_job_from_schedule(schedule["id"])
+
+        assert job["repeat_count"] == 3
+        assert job["round_interval_seconds"] == 300
+        assert job["total"] == 6
+        assert [(t["keyword"], t["round_number"]) for t in job["tasks"]] == [
+            ("关键词 A", 1),
+            ("关键词 B", 1),
+            ("关键词 A", 2),
+            ("关键词 B", 2),
+            ("关键词 A", 3),
+            ("关键词 B", 3),
+        ]

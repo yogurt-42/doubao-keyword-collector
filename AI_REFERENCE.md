@@ -173,11 +173,11 @@ D:\ai-source-capturer\doubao-keyword-collector
   - WAL 模式 + 外键约束；`synchronous = NORMAL`、`cache_size = -32768`。
   - 每个线程通过 `threading.local()` 复用一个连接，避免频繁开闭。
   - 核心表：
-    - `research_jobs`：任务批次（name、prompt_template、status、scheduled_at、interval_seconds、max_attempts、account_ids_json、**ai_platform**）。
-    - `research_tasks`：每个关键词一次执行（job_id、keyword、status、scheduled_at、account_id、attempt_count、result_count）。
+    - `research_jobs`：任务批次（name、prompt_template、status、scheduled_at、interval_seconds、max_attempts、account_ids_json、**ai_platform**、**repeat_count**、**round_interval_seconds**）。
+    - `research_tasks`：每个关键词一次执行（job_id、keyword、status、scheduled_at、account_id、attempt_count、result_count、**round_number**）。
     - `research_results`：采集到的每条链接（job_id、task_id、keyword、link、platform、platform_type、account_id、collected_at/date、title、**ai_platform**）。
     - `account_runtime`：账号使用/暂停状态。
-    - `research_job_templates`：任务模板（name、keywords_json、prompt_template、interval_seconds、account_cooldown_seconds、max_attempts、**ai_platforms_json**）。
+    - `research_job_templates`：任务模板（name、keywords_json、prompt_template、interval_seconds、account_cooldown_seconds、max_attempts、**ai_platforms_json**、**repeat_count**、**round_interval_seconds**）。
     - `research_schedules`：触发计划（name、template_id、enabled、schedule_type、schedule_value、next_run_at、run_count、last_job_id）。
   - 核心方法：
     - `create_job()` / `list_jobs()` / `get_job()` / `set_job_status()` / `rename_job()` / `delete_job()`。
@@ -351,12 +351,13 @@ D:\ai-source-capturer\doubao-keyword-collector
 research_jobs (
     id, name, prompt_template, status, scheduled_at,
     interval_seconds, account_cooldown_seconds, max_attempts,
-    account_ids_json, ai_platform, created_at, started_at, finished_at, last_error
+    account_ids_json, ai_platform, repeat_count, round_interval_seconds,
+    created_at, started_at, finished_at, last_error
 )
 
 research_tasks (
     id, job_id, position, keyword, status, scheduled_at,
-    account_id, attempt_count, answer, error, result_count,
+    account_id, attempt_count, round_number, answer, error, result_count,
     created_at, started_at, finished_at
 )
 
@@ -372,7 +373,8 @@ account_runtime (
 research_job_templates (
     id, name, keywords_json, prompt_template,
     interval_seconds, account_cooldown_seconds, max_attempts,
-    ai_platforms_json, created_at, updated_at
+    ai_platforms_json, repeat_count, round_interval_seconds,
+    created_at, updated_at
 )
 
 research_schedules (
@@ -399,7 +401,7 @@ research_schedules (
 1. UI：`create_job()` 收集关键词、prompt、账号、间隔、重试次数；AI 平台为多选，**每个勾选的平台独立调用一次 `create_job()`**，任务名自动带平台名（`关键词-平台-日期`）区分。
 2. `ResearchStore.create_job()`：
    - 插入 `research_jobs`（status=running）。
-   - 每个关键词生成一条 `research_tasks`（status=pending，scheduled_at 按间隔递增）。
+   - 每个关键词生成 `repeat_count` 条 `research_tasks`（status=pending）：**按轮次交错展开**（全部关键词第 1 轮 → 第 2 轮……），每条记录 `round_number`；`scheduled_at` 按 `position × interval_seconds + (round_number - 1) × round_interval_seconds` 递增，轮次间等待用于降低连续提问触发人机验证的概率。
 3. `scheduler.wake()` 触发调度循环。
 4. `ResearchScheduler._dispatch_due_tasks()`：
    - 查询 `due_tasks()`。

@@ -118,6 +118,8 @@ class ResearchJobCreateRequest(BaseModel):
     interval_seconds: int = Field(default=10, ge=1, le=86400)
     account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
     max_attempts: int = Field(default=2, ge=1, le=3)
+    repeat_count: int = Field(default=1, ge=1, le=50)
+    round_interval_seconds: int = Field(default=0, ge=0, le=86400)
     ai_platforms: list[str] = Field(default_factory=list)
     # 旧字段，仅为兼容旧客户端；发送 ai_platform 时自动并入 ai_platforms
     ai_platform: str | None = None
@@ -136,6 +138,8 @@ class ResearchJobTemplateCreateRequest(BaseModel):
     interval_seconds: int = Field(default=10, ge=1, le=86400)
     account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
     max_attempts: int = Field(default=2, ge=1, le=3)
+    repeat_count: int = Field(default=1, ge=1, le=50)
+    round_interval_seconds: int = Field(default=0, ge=0, le=86400)
     ai_platforms: list[str] = Field(default_factory=lambda: ["doubao"])
 
 
@@ -146,6 +150,8 @@ class ResearchJobTemplateUpdateRequest(BaseModel):
     interval_seconds: int = Field(default=10, ge=1, le=86400)
     account_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
     max_attempts: int = Field(default=2, ge=1, le=3)
+    repeat_count: int = Field(default=1, ge=1, le=50)
+    round_interval_seconds: int = Field(default=0, ge=0, le=86400)
     ai_platforms: list[str] = Field(default_factory=lambda: ["doubao"])
 
 

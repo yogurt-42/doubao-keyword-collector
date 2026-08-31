@@ -134,24 +134,25 @@ def test_import_create_and_export(tmp_path: Path) -> None:
             "任务",
             "日期",
             "提问关键词",
+            "轮次",
             "AI平台",
             "资料名称",
             "检索资料链接",
             "检索资料平台",
             "平台类型",
         )
-        assert rows[1][4] == "报告"
-        assert rows[1][:7] == (
+        assert rows[1][3] == 1
+        assert rows[1][5] == "报告"
+        assert (rows[1][0], rows[1][2], rows[1][4], rows[1][5], rows[1][6], rows[1][7]) == (
             job_name,
-            rows[1][1],
             "新能源汽车",
             "doubao",
             "报告",
             TEST_LINK,
             TEST_DOMAIN,
         )
-        assert rows[1][7] is not None
-        assert isinstance(rows[1][7], str)
+        assert rows[1][8] is not None
+        assert isinstance(rows[1][8], str)
 
         results = client.get("/admin/api/research/results")
         assert results.status_code == 200

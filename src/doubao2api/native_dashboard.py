@@ -1178,13 +1178,41 @@ class NativeDashboard(QWidget):
         self.max_attempts = QSpinBox()
         self.max_attempts.setRange(1, 3)
         self.max_attempts.setValue(2)
+        self.repeat_count = QSpinBox()
+        self.repeat_count.setRange(1, 50)
+        self.repeat_count.setValue(1)
+        self.repeat_count.setSuffix(" 次")
+        self.repeat_count.setToolTip(
+            "同一关键词连续采集多次：按轮次交错执行（全部关键词第 1 轮 → 第 2 轮……），"
+            "用于收齐更多信源、统计信源出现频次"
+        )
+        self.round_interval_seconds = QSpinBox()
+        self.round_interval_seconds.setRange(0, 86400)
+        self.round_interval_seconds.setValue(0)
+        self.round_interval_seconds.setSuffix(" 秒")
+        self.round_interval_seconds.setToolTip(
+            "每轮采集之间额外等待的时间，0 表示不等待；"
+            "轮次较多时建议设置（如 300 秒以上），降低连续提问触发人机验证的概率"
+        )
         timing_row.addWidget(QLabel("关键词启动间隔"))
         timing_row.addWidget(self.interval_seconds, 1)
         timing_row.addSpacing(12)
         timing_row.addWidget(QLabel("最多尝试"))
         timing_row.addWidget(self.max_attempts, 1)
+        timing_row.addSpacing(12)
+        timing_row.addWidget(QLabel("每个关键词采集"))
+        timing_row.addWidget(self.repeat_count, 1)
+        timing_row.addSpacing(12)
+        timing_row.addWidget(QLabel("轮次间等待"))
+        timing_row.addWidget(self.round_interval_seconds, 1)
         timing_row.addStretch(2)
         form.addLayout(timing_row)
+
+        repeat_hint = QLabel(
+            "提示：采集轮次过多会增加人机验证风险，建议轮次较多时设置“轮次间等待”拉开间隔"
+        )
+        repeat_hint.setObjectName("muted")
+        form.addWidget(repeat_hint)
 
         self.prompt_template = QLineEdit(DEFAULT_PROMPT)
         self.prompt_template.setPlaceholderText("{keyword}")
@@ -1427,10 +1455,10 @@ class NativeDashboard(QWidget):
         result_header.addWidget(copy_button)
         result_header.addWidget(open_button)
         layout.addLayout(result_header)
-        self.results_table = QTableWidget(0, 6)
+        self.results_table = QTableWidget(0, 7)
         self.results_table.setMinimumHeight(260)
         self.results_table.setHorizontalHeaderLabels(
-            ["任务", "日期", "提问关键词", "资料名称", "检索资料链接", "检索资料平台"]
+            ["任务", "日期", "提问关键词", "轮次", "资料名称", "检索资料链接", "检索资料平台"]
         )
         self._configure_table(self.results_table)
         self.results_table.horizontalHeader().setSectionResizeMode(
@@ -2345,6 +2373,32 @@ class NativeDashboard(QWidget):
         )
         self.template_platforms.set_selected_values(["doubao"])
         template_form.addWidget(self.template_platforms, 4, 3)
+
+        template_form.addWidget(QLabel("每个关键词采集"), 5, 0)
+        self.template_repeat_count = QSpinBox()
+        self.template_repeat_count.setRange(1, 50)
+        self.template_repeat_count.setValue(1)
+        self.template_repeat_count.setSuffix(" 次")
+        self.template_repeat_count.setToolTip(
+            "同一关键词连续采集多次：按轮次交错执行（全部关键词第 1 轮 → 第 2 轮……），"
+            "用于收齐更多信源、统计信源出现频次"
+        )
+        template_form.addWidget(self.template_repeat_count, 5, 1)
+
+        template_form.addWidget(QLabel("轮次间等待"), 5, 2)
+        self.template_round_interval_seconds = QSpinBox()
+        self.template_round_interval_seconds.setRange(0, 86400)
+        self.template_round_interval_seconds.setValue(0)
+        self.template_round_interval_seconds.setSuffix(" 秒")
+        self.template_round_interval_seconds.setToolTip(
+            "每轮采集之间额外等待的时间，0 表示不等待；"
+            "轮次较多时建议设置（如 300 秒以上），降低连续提问触发人机验证的概率"
+        )
+        template_form.addWidget(self.template_round_interval_seconds, 5, 3)
+
+        repeat_risk_hint = QLabel("提示：采集轮次过多会增加人机验证风险")
+        repeat_risk_hint.setObjectName("muted")
+        template_form.addWidget(repeat_risk_hint, 6, 1, 1, 3)
         templates_layout.addLayout(template_form)
 
         template_buttons = QHBoxLayout()
@@ -2451,6 +2505,8 @@ class NativeDashboard(QWidget):
         self.template_interval_seconds.setValue(10)
         self.template_account_cooldown_seconds.setValue(0)
         self.template_max_attempts.setValue(2)
+        self.template_repeat_count.setValue(1)
+        self.template_round_interval_seconds.setValue(0)
         self.template_platforms.set_selected_values(["doubao"])
         self.template_save_button.setText("保存模板")
 
@@ -2738,8 +2794,14 @@ class NativeDashboard(QWidget):
         completed = row["completed"]
         failed = row["failed"]
         pending = row["pending"]
+        repeat_count = int(row.get("repeat_count") or 1)
+        keyword_count = int(row.get("keyword_count") or 0)
+        if repeat_count > 1 and keyword_count:
+            total_text = f"共 {keyword_count} 个关键词 × {repeat_count} 轮 = {row['total']} 次采集"
+        else:
+            total_text = f"共 {row['total']} 个关键词"
         summary = QLabel(
-            f"共 {row['total']} 个关键词 · 成功 {completed} · 失败 {failed}"
+            f"{total_text} · 成功 {completed} · 失败 {failed}"
             f" · 进行中 {row['running_tasks']} · 待处理 {pending}"
         )
         summary.setObjectName("muted")
@@ -3262,6 +3324,8 @@ class NativeDashboard(QWidget):
         account_cooldown_seconds = self.template_account_cooldown_seconds.value()
         max_attempts = self.template_max_attempts.value()
         ai_platforms = self.template_platforms.selected_values() or ["doubao"]
+        repeat_count = self.template_repeat_count.value()
+        round_interval_seconds = self.template_round_interval_seconds.value()
 
         def save() -> dict[str, Any]:
             if self.editing_template_id:
@@ -3274,6 +3338,8 @@ class NativeDashboard(QWidget):
                     account_cooldown_seconds=account_cooldown_seconds,
                     max_attempts=max_attempts,
                     ai_platforms=ai_platforms,
+                    repeat_count=repeat_count,
+                    round_interval_seconds=round_interval_seconds,
                 )
             return self.backend.research_store.create_job_template(
                 name=name,
@@ -3283,6 +3349,8 @@ class NativeDashboard(QWidget):
                 account_cooldown_seconds=account_cooldown_seconds,
                 max_attempts=max_attempts,
                 ai_platforms=ai_platforms,
+                repeat_count=repeat_count,
+                round_interval_seconds=round_interval_seconds,
             )
 
         future = self.backend.call(save)
@@ -3311,6 +3379,10 @@ class NativeDashboard(QWidget):
                 int(template.get("account_cooldown_seconds", 0))
             )
             self.template_max_attempts.setValue(int(template.get("max_attempts", 2)))
+            self.template_repeat_count.setValue(int(template.get("repeat_count", 1) or 1))
+            self.template_round_interval_seconds.setValue(
+                int(template.get("round_interval_seconds", 0) or 0)
+            )
             self.template_platforms.set_selected_values(
                 list(template.get("ai_platforms", ["doubao"]))
             )
@@ -3670,6 +3742,8 @@ class NativeDashboard(QWidget):
                     account_cooldown_seconds=0,
                     max_attempts=self.max_attempts.value(),
                     ai_platform=platform_key,
+                    repeat_count=self.repeat_count.value(),
+                    round_interval_seconds=self.round_interval_seconds.value(),
                 )
                 for platform_key in platforms
             ]
@@ -4028,15 +4102,16 @@ class NativeDashboard(QWidget):
                         row["job_name"],
                         row["collected_date"],
                         row["keyword"],
+                        str(row.get("round_number") or 1),
                         row["title"][:200],
                         row["link"][:200],
                         row["platform"],
                     ]
                     for column, value in enumerate(values):
                         item = QTableWidgetItem(value)
-                        if column in {3, 4}:
-                            item.setToolTip(row["title"] if column == 3 else row["link"])
-                        if column == 4:
+                        if column in {4, 5}:
+                            item.setToolTip(row["title"] if column == 4 else row["link"])
+                        if column == 5:
                             item.setForeground(QColor("#4f51c8"))
                         self.results_table.setItem(row_index, column, item)
             finally:
@@ -4310,7 +4385,7 @@ class NativeDashboard(QWidget):
         row = self.results_table.currentRow()
         if row < 0:
             return ""
-        item = self.results_table.item(row, 4)
+        item = self.results_table.item(row, 5)
         return item.text().strip() if item else ""
 
     def copy_selected_link(self) -> None:
@@ -4329,7 +4404,7 @@ class NativeDashboard(QWidget):
         QDesktopServices.openUrl(QUrl(link))
 
     def _open_result_cell(self, row: int, column: int) -> None:
-        if column != 4:
+        if column != 5:
             return
         self.results_table.setCurrentCell(row, column)
         self.open_selected_link()

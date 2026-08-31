@@ -506,8 +506,11 @@ def create_app(
         keywords = normalize_keywords(body.keywords)
         if not keywords:
             raise HTTPException(status_code=400, detail="请至少填写一个关键词")
-        if len(keywords) > 10000:
-            raise HTTPException(status_code=400, detail="单个任务最多支持 10000 个关键词")
+        if len(keywords) * body.repeat_count > 10000:
+            raise HTTPException(
+                status_code=400,
+                detail="关键词数 × 采集次数不能超过 10000 个采集单元",
+            )
         if "{keyword}" not in body.prompt_template:
             raise HTTPException(
                 status_code=400,
@@ -533,6 +536,8 @@ def create_app(
                     account_cooldown_seconds=body.account_cooldown_seconds,
                     max_attempts=body.max_attempts,
                     ai_platform=ai_platform,
+                    repeat_count=body.repeat_count,
+                    round_interval_seconds=body.round_interval_seconds,
                 )
                 for ai_platform in body.ai_platforms
             ]
@@ -621,6 +626,8 @@ def create_app(
                 account_cooldown_seconds=body.account_cooldown_seconds,
                 max_attempts=body.max_attempts,
                 ai_platforms=body.ai_platforms,
+                repeat_count=body.repeat_count,
+                round_interval_seconds=body.round_interval_seconds,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -656,6 +663,8 @@ def create_app(
                 account_cooldown_seconds=body.account_cooldown_seconds,
                 max_attempts=body.max_attempts,
                 ai_platforms=body.ai_platforms,
+                repeat_count=body.repeat_count,
+                round_interval_seconds=body.round_interval_seconds,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="任务模板不存在") from exc

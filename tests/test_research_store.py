@@ -1,6 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from doubao2api.research_store import ResearchStore
 
 
@@ -250,3 +252,169 @@ def test_database_indexes_exist(tmp_path: Path) -> None:
         "idx_account_runtime_paused",
     }
     assert expected.issubset(indexes), f"缺少索引: {expected - indexes}"
+
+
+def _create_repeat_job(store: ResearchStore, **overrides: object) -> dict:
+    defaults = {
+        "name": "重复采集",
+        "keywords": ["关键词 A", "关键词 B"],
+        "account_ids": [],
+        "prompt_template": "{keyword}",
+        "scheduled_at": None,
+        "interval_seconds": 10,
+        "account_cooldown_seconds": 0,
+        "max_attempts": 1,
+        "repeat_count": 3,
+    }
+    defaults.update(overrides)
+    return store.create_job(**defaults)
+
+
+def test_repeat_job_expands_tasks_round_interleaved(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "repeat.sqlite3")
+    job = _create_repeat_job(store)
+
+    assert job["repeat_count"] == 3
+    assert job["total"] == 6
+    tasks = job["tasks"]
+    # 轮次交错：全部关键词第 1 轮 → 第 2 轮 → 第 3 轮
+    assert [(task["keyword"], task["round_number"]) for task in tasks] == [
+        ("关键词 A", 1),
+        ("关键词 B", 1),
+        ("关键词 A", 2),
+        ("关键词 B", 2),
+        ("关键词 A", 3),
+        ("关键词 B", 3),
+    ]
+    assert [task["position"] for task in tasks] == list(range(6))
+    # 启动间隔按展开后的顺序递增
+    scheduled = [datetime.fromisoformat(task["scheduled_at"]) for task in tasks]
+    assert all(later > earlier for earlier, later in zip(scheduled, scheduled[1:], strict=False))
+
+
+def test_repeat_job_defaults_to_single_round(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "single.sqlite3")
+    job = store.create_job(
+        name="单次",
+        keywords=["关键词"],
+        account_ids=[],
+        prompt_template="{keyword}",
+        scheduled_at=None,
+        interval_seconds=5,
+        account_cooldown_seconds=0,
+        max_attempts=1,
+    )
+
+    assert job["repeat_count"] == 1
+    assert job["total"] == 1
+    assert job["tasks"][0]["round_number"] == 1
+
+
+def test_repeat_job_rejects_out_of_range_repeat_count(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "range.sqlite3")
+    for bad_value in (0, 51):
+        with pytest.raises(ValueError, match="采集次数"):
+            _create_repeat_job(store, repeat_count=bad_value)
+
+
+def test_repeat_job_rejects_too_many_units(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "units.sqlite3")
+    with pytest.raises(ValueError, match="采集单元"):
+        _create_repeat_job(store, keywords=[f"关键词 {index}" for index in range(4000)])
+
+
+def test_repeat_results_deduplicate_within_task_but_not_across_rounds(
+    tmp_path: Path,
+) -> None:
+    store = ResearchStore(tmp_path / "rounds.sqlite3")
+    job = _create_repeat_job(store, keywords=["关键词 A"], repeat_count=2)
+    tasks = job["tasks"]
+    assert [task["round_number"] for task in tasks] == [1, 2]
+    item = {"link": "https://example.com/a", "platform": "示例", "title": "来源"}
+
+    assert store.add_result(tasks[0]["id"], item=item, account_id="账号1")
+    # 同一轮（同一 task）内重复链接被忽略
+    assert not store.add_result(tasks[0]["id"], item=item, account_id="账号1")
+    # 跨轮次（不同 task）同一链接允许重复保存，供频次统计
+    assert store.add_result(tasks[1]["id"], item=item, account_id="账号1")
+
+    results = store.list_results(job_id=job["id"])
+    assert len(results) == 2
+    assert {result["round_number"] for result in results} == {1, 2}
+
+
+def test_round_interval_delays_later_rounds(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "round_interval.sqlite3")
+    job = _create_repeat_job(
+        store,
+        keywords=["关键词 A", "关键词 B"],
+        interval_seconds=10,
+        repeat_count=3,
+        round_interval_seconds=300,
+    )
+    assert job["round_interval_seconds"] == 300
+
+    scheduled = [datetime.fromisoformat(task["scheduled_at"]) for task in job["tasks"]]
+    base = scheduled[0]
+    offsets = [(value - base).total_seconds() for value in scheduled]
+    # 第 1 轮：0、10；第 2 轮整体 +300：320、330；第 3 轮整体 +600：640、650
+    assert offsets == [0, 10, 320, 330, 640, 650]
+
+
+def test_round_interval_defaults_to_zero(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "no_interval.sqlite3")
+    job = _create_repeat_job(store, repeat_count=2)
+    assert job["round_interval_seconds"] == 0
+
+    scheduled = [datetime.fromisoformat(task["scheduled_at"]) for task in job["tasks"]]
+    offsets = [(value - scheduled[0]).total_seconds() for value in scheduled]
+    assert offsets == [0, 10, 20, 30]
+
+
+def test_round_interval_rejects_out_of_range(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "bad_interval.sqlite3")
+    for bad_value in (-1, 86401):
+        with pytest.raises(ValueError, match="轮次间等待时间"):
+            _create_repeat_job(store, round_interval_seconds=bad_value)
+
+
+def test_repeat_columns_added_to_existing_database(tmp_path: Path) -> None:
+    import sqlite3
+
+    if sqlite3.sqlite_version_info < (3, 35, 0):
+        pytest.skip("当前 SQLite 版本不支持 DROP COLUMN，无法模拟旧库")
+    database = tmp_path / "legacy.sqlite3"
+    store = ResearchStore(database)
+    _create_repeat_job(store, repeat_count=2)
+    del store
+
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("ALTER TABLE research_jobs DROP COLUMN repeat_count")
+        connection.execute("ALTER TABLE research_jobs DROP COLUMN round_interval_seconds")
+        connection.execute("ALTER TABLE research_tasks DROP COLUMN round_number")
+        connection.execute("ALTER TABLE research_job_templates DROP COLUMN repeat_count")
+        connection.execute("ALTER TABLE research_job_templates DROP COLUMN round_interval_seconds")
+        connection.commit()
+    finally:
+        connection.close()
+
+    reopened = ResearchStore(database)
+    connection = sqlite3.connect(database)
+    try:
+        job_columns = {row[1] for row in connection.execute("PRAGMA table_info(research_jobs)")}
+        task_columns = {row[1] for row in connection.execute("PRAGMA table_info(research_tasks)")}
+        template_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(research_job_templates)")
+        }
+    finally:
+        connection.close()
+    assert "repeat_count" in job_columns
+    assert "round_interval_seconds" in job_columns
+    assert "round_number" in task_columns
+    assert "repeat_count" in template_columns
+    assert "round_interval_seconds" in template_columns
+    # 迁移后旧任务仍可读取，被删除的列按默认值重建
+    old_job = reopened.list_jobs()[0]
+    assert old_job["repeat_count"] == 1
+    assert old_job["round_interval_seconds"] == 0

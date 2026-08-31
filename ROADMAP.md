@@ -1,7 +1,7 @@
 # 开发路线图
 
 > 记录已完成大事记与下一阶段计划。
-> 最近一次更新：2026-08-27
+> 最近一次更新：2026-08-31
 
 ---
 
@@ -37,6 +37,7 @@
 | 26 | 更新下载支持断点续传与 30 分钟卡住检测 | `update_checker.py`, `config.py`, `native_dashboard.py` |
 | 27 | 桌面端加载速度优化（SQLite 索引、聚合查询缓存、非阻塞后端初始化）+ 记忆化账号启动/隐藏状态恢复 + 调度器自动拉起未启动账号 | `research_store.py`, `account_manager.py`, `config.py`, `native_dashboard.py`, `research_scheduler.py`, `desktop.py`, `windows_entry.py` |
 | 28 | 新建任务支持勾选平台自动生成多任务：桌面/Web 平台多选、按平台拆分创建、账号随平台自动筛选；定时任务模板支持多平台（`ai_platforms_json`）；API 兼容旧 `ai_platform` 字段 | `native_dashboard.py`, `research_store.py`, `research_scheduler.py`, `models.py`, `server.py`, `static/index.html` |
+| 29 | 同一关键词重复采集（轮次）：任务/模板支持"每个关键词采集次数"（repeat_count，1-50）与"轮次间等待时间"（round_interval_seconds）；按轮次交错展开 task 并记录 round_number；结果页/导出增加轮次列；任务卡片显示轮次进度与验证风险提示 | `research_store.py`, `models.py`, `server.py`, `native_dashboard.py`, `research_export.py`, `tests/` |
 
 > 各阶段技术细节参见 `CLAUDE.md` 与 `AI_REFERENCE.md`。
 
@@ -55,6 +56,7 @@
 | 更多 AI 平台 | 按 `platforms/` 模式接入 Kimi、通义千问等 | `platforms/` |
 | 平台响应捕获完善 | 实测并补充 DeepSeek 网络响应捕获模式 | `platforms/deepseek.py` |
 | 采集可观测性 | 在日志中记录每个任务的平台、账号、结果数、耗时 | `research_scheduler.py` |
+| 信源频次统计视图 | 基于重复采集数据，按关键词聚合信源的出现次数/出现率（出现轮数 ÷ 总轮数）/最近出现时间，支持导出；Web 端结果表同步轮次列 | `research_store.py`, `native_dashboard.py`, `research_export.py`, `static/index.html` |
 
 ---
 

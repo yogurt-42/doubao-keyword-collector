@@ -17,6 +17,8 @@ from .research_platforms import category_for_url, platform_category
 _T = TypeVar("_T")
 
 LONG_TAIL_TOP_N = 20
+MAX_REPEAT_COUNT = 50
+MAX_JOB_TASKS = 10000
 
 
 def local_now() -> datetime:
@@ -146,6 +148,8 @@ class ResearchStore:
                     max_attempts INTEGER NOT NULL,
                     account_ids_json TEXT NOT NULL,
                     ai_platform TEXT NOT NULL DEFAULT 'doubao',
+                    repeat_count INTEGER NOT NULL DEFAULT 1,
+                    round_interval_seconds INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     started_at TEXT,
                     finished_at TEXT,
@@ -160,6 +164,7 @@ class ResearchStore:
                     scheduled_at TEXT NOT NULL,
                     account_id TEXT NOT NULL DEFAULT '',
                     attempt_count INTEGER NOT NULL DEFAULT 0,
+                    round_number INTEGER NOT NULL DEFAULT 1,
                     answer TEXT NOT NULL DEFAULT '',
                     error TEXT NOT NULL DEFAULT '',
                     result_count INTEGER NOT NULL DEFAULT 0,
@@ -214,6 +219,8 @@ class ResearchStore:
                     interval_seconds INTEGER NOT NULL,
                     account_cooldown_seconds INTEGER NOT NULL DEFAULT 0,
                     max_attempts INTEGER NOT NULL,
+                    repeat_count INTEGER NOT NULL DEFAULT 1,
+                    round_interval_seconds INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -278,6 +285,43 @@ class ResearchStore:
             self._ensure_platform_type_column(connection)
             self._ensure_ai_platform_column(connection)
             self._ensure_template_platforms_column(connection)
+            self._ensure_repeat_count_columns(connection)
+
+    def _ensure_repeat_count_columns(self, connection: sqlite3.Connection) -> None:
+        job_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(research_jobs)").fetchall()
+        }
+        if "repeat_count" not in job_columns:
+            connection.execute(
+                "ALTER TABLE research_jobs ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1"
+            )
+        if "round_interval_seconds" not in job_columns:
+            connection.execute(
+                "ALTER TABLE research_jobs "
+                "ADD COLUMN round_interval_seconds INTEGER NOT NULL DEFAULT 0"
+            )
+        task_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(research_tasks)").fetchall()
+        }
+        if "round_number" not in task_columns:
+            connection.execute(
+                "ALTER TABLE research_tasks ADD COLUMN round_number INTEGER NOT NULL DEFAULT 1"
+            )
+        template_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(research_job_templates)").fetchall()
+        }
+        if "repeat_count" not in template_columns:
+            connection.execute(
+                "ALTER TABLE research_job_templates "
+                "ADD COLUMN repeat_count INTEGER NOT NULL DEFAULT 1"
+            )
+        if "round_interval_seconds" not in template_columns:
+            connection.execute(
+                "ALTER TABLE research_job_templates "
+                "ADD COLUMN round_interval_seconds INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _ensure_template_platforms_column(self, connection: sqlite3.Connection) -> None:
         columns = {
@@ -341,8 +385,16 @@ class ResearchStore:
         account_cooldown_seconds: int,
         max_attempts: int,
         ai_platform: str = "doubao",
+        repeat_count: int = 1,
+        round_interval_seconds: int = 0,
     ) -> dict[str, Any]:
         self._invalidate_cache()
+        if not 1 <= repeat_count <= MAX_REPEAT_COUNT:
+            raise ValueError(f"每个关键词采集次数必须在 1 到 {MAX_REPEAT_COUNT} 之间")
+        if not 0 <= round_interval_seconds <= 86400:
+            raise ValueError("轮次间等待时间必须在 0 到 86400 秒之间")
+        if len(keywords) * repeat_count > MAX_JOB_TASKS:
+            raise ValueError(f"关键词数 × 采集次数不能超过 {MAX_JOB_TASKS} 个采集单元")
         job_id = uuid.uuid4().hex
         created_at = iso_now()
         first_due = datetime.fromisoformat(normalize_datetime(scheduled_at))
@@ -352,8 +404,8 @@ class ResearchStore:
                 INSERT INTO research_jobs (
                     id, name, prompt_template, status, scheduled_at, interval_seconds,
                     account_cooldown_seconds, max_attempts, account_ids_json, ai_platform,
-                    created_at
-                ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
+                    repeat_count, round_interval_seconds, created_at
+                ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -365,32 +417,43 @@ class ResearchStore:
                     max_attempts,
                     json.dumps(account_ids, ensure_ascii=False),
                     ai_platform,
+                    repeat_count,
+                    round_interval_seconds,
                     created_at,
                 ),
             )
-            for position, keyword in enumerate(keywords):
-                due = first_due + timedelta(seconds=position * interval_seconds)
-                connection.execute(
-                    """
-                    INSERT INTO research_tasks (
-                        id, job_id, position, keyword, status, scheduled_at, created_at
-                    ) VALUES (?, ?, ?, ?, 'pending', ?, ?)
-                    """,
-                    (
-                        uuid.uuid4().hex,
-                        job_id,
-                        position,
-                        keyword,
-                        due.isoformat(timespec="seconds"),
-                        created_at,
-                    ),
-                )
+            # 轮次交错展开：全部关键词第 1 轮 → 第 2 轮……
+            # 同一关键词的重复提问之间被其他关键词稀释，降低触发风控的概率。
+            # 第 R 轮整体额外延后 (R-1) × round_interval_seconds，进一步拉开轮次间距。
+            position = 0
+            for round_number in range(1, repeat_count + 1):
+                round_offset = (round_number - 1) * round_interval_seconds
+                for keyword in keywords:
+                    due = first_due + timedelta(seconds=position * interval_seconds + round_offset)
+                    connection.execute(
+                        """
+                        INSERT INTO research_tasks (
+                            id, job_id, position, keyword, status, scheduled_at,
+                            round_number, created_at
+                        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+                        """,
+                        (
+                            uuid.uuid4().hex,
+                            job_id,
+                            position,
+                            keyword,
+                            due.isoformat(timespec="seconds"),
+                            round_number,
+                            created_at,
+                        ),
+                    )
+                    position += 1
         return self.get_job(job_id)
 
     def _job_row(self, row: sqlite3.Row) -> dict[str, Any]:
         item = dict(row)
         item["account_ids"] = json.loads(item.pop("account_ids_json"))
-        for key in ("total", "completed", "failed", "pending", "running_tasks"):
+        for key in ("total", "completed", "failed", "pending", "running_tasks", "keyword_count"):
             if key in item:
                 item[key] = int(item[key] or 0)
         item["active_details"] = str(item.get("active_details") or "")
@@ -407,13 +470,18 @@ class ResearchStore:
                 """
                 SELECT j.*,
                     COUNT(t.id) AS total,
+                    COUNT(DISTINCT t.keyword) AS keyword_count,
                     SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completed,
                     SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END) AS failed,
                     SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END) AS pending,
                     SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END) AS running_tasks,
                     GROUP_CONCAT(
                         CASE WHEN t.status = 'running'
-                            THEN t.keyword || ' · ' || t.account_id END,
+                            THEN t.keyword ||
+                                CASE WHEN j.repeat_count > 1
+                                    THEN '（第' || t.round_number || '轮）'
+                                    ELSE '' END ||
+                                ' · ' || t.account_id END,
                         '；'
                     ) AS active_details
                 FROM research_jobs j
@@ -445,13 +513,18 @@ class ResearchStore:
                 """
                 SELECT j.*,
                     COUNT(t.id) AS total,
+                    COUNT(DISTINCT t.keyword) AS keyword_count,
                     SUM(CASE WHEN t.status = 'completed' THEN 1 ELSE 0 END) AS completed,
                     SUM(CASE WHEN t.status = 'failed' THEN 1 ELSE 0 END) AS failed,
                     SUM(CASE WHEN t.status = 'pending' THEN 1 ELSE 0 END) AS pending,
                     SUM(CASE WHEN t.status = 'running' THEN 1 ELSE 0 END) AS running_tasks,
                     GROUP_CONCAT(
                         CASE WHEN t.status = 'running'
-                            THEN t.keyword || ' · ' || t.account_id END,
+                            THEN t.keyword ||
+                                CASE WHEN j.repeat_count > 1
+                                    THEN '（第' || t.round_number || '轮）'
+                                    ELSE '' END ||
+                                ' · ' || t.account_id END,
                         '；'
                     ) AS active_details
                 FROM research_jobs j
@@ -794,6 +867,8 @@ class ResearchStore:
         keywords: list[str],
         prompt_template: str,
         max_attempts: int,
+        repeat_count: int = 1,
+        round_interval_seconds: int = 0,
     ) -> list[str]:
         normalized = [keyword.strip() for keyword in keywords if keyword.strip()]
         if not normalized:
@@ -802,6 +877,12 @@ class ResearchStore:
             raise ValueError("提问模板必须包含 {keyword} 占位符")
         if not 1 <= max_attempts <= 3:
             raise ValueError("最多尝试次数必须在 1 到 3 之间")
+        if not 1 <= repeat_count <= MAX_REPEAT_COUNT:
+            raise ValueError(f"每个关键词采集次数必须在 1 到 {MAX_REPEAT_COUNT} 之间")
+        if not 0 <= round_interval_seconds <= 86400:
+            raise ValueError("轮次间等待时间必须在 0 到 86400 秒之间")
+        if len(normalized) * repeat_count > MAX_JOB_TASKS:
+            raise ValueError(f"关键词数 × 采集次数不能超过 {MAX_JOB_TASKS} 个采集单元")
         return normalized
 
     def _job_template_row(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -830,8 +911,12 @@ class ResearchStore:
         account_cooldown_seconds: int,
         max_attempts: int,
         ai_platforms: list[str] | None = None,
+        repeat_count: int = 1,
+        round_interval_seconds: int = 0,
     ) -> dict[str, Any]:
-        normalized = self._validate_job_template_inputs(keywords, prompt_template, max_attempts)
+        normalized = self._validate_job_template_inputs(
+            keywords, prompt_template, max_attempts, repeat_count, round_interval_seconds
+        )
         template_id = uuid.uuid4().hex
         created_at = iso_now()
         with self._connect() as connection:
@@ -840,8 +925,8 @@ class ResearchStore:
                 INSERT INTO research_job_templates (
                     id, name, keywords_json, prompt_template, interval_seconds,
                     account_cooldown_seconds, max_attempts, ai_platforms_json,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    repeat_count, round_interval_seconds, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     template_id,
@@ -852,6 +937,8 @@ class ResearchStore:
                     account_cooldown_seconds,
                     max_attempts,
                     self._normalize_template_platforms(ai_platforms),
+                    repeat_count,
+                    round_interval_seconds,
                     created_at,
                     created_at,
                 ),
@@ -885,8 +972,12 @@ class ResearchStore:
         account_cooldown_seconds: int,
         max_attempts: int,
         ai_platforms: list[str] | None = None,
+        repeat_count: int = 1,
+        round_interval_seconds: int = 0,
     ) -> dict[str, Any]:
-        normalized = self._validate_job_template_inputs(keywords, prompt_template, max_attempts)
+        normalized = self._validate_job_template_inputs(
+            keywords, prompt_template, max_attempts, repeat_count, round_interval_seconds
+        )
         updated_at = iso_now()
         with self._connect() as connection:
             result = connection.execute(
@@ -899,6 +990,8 @@ class ResearchStore:
                     account_cooldown_seconds = ?,
                     max_attempts = ?,
                     ai_platforms_json = ?,
+                    repeat_count = ?,
+                    round_interval_seconds = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -910,6 +1003,8 @@ class ResearchStore:
                     account_cooldown_seconds,
                     max_attempts,
                     self._normalize_template_platforms(ai_platforms),
+                    repeat_count,
+                    round_interval_seconds,
                     updated_at,
                     template_id,
                 ),
@@ -1101,6 +1196,8 @@ class ResearchStore:
                 account_cooldown_seconds=template["account_cooldown_seconds"],
                 max_attempts=template["max_attempts"],
                 ai_platform=ai_platform,
+                repeat_count=int(template.get("repeat_count") or 1),
+                round_interval_seconds=int(template.get("round_interval_seconds") or 0),
             )
             for ai_platform in template["ai_platforms"]
         ]
@@ -1335,9 +1432,11 @@ class ResearchStore:
             with self._connect() as connection:
                 rows = connection.execute(
                     f"""
-                    SELECT r.*, j.name AS job_name, j.ai_platform AS ai_platform
+                    SELECT r.*, j.name AS job_name, j.ai_platform AS ai_platform,
+                        t.round_number AS round_number
                     FROM research_results r
                     JOIN research_jobs j ON j.id = r.job_id
+                    JOIN research_tasks t ON t.id = r.task_id
                     {where}
                     ORDER BY r.collected_at DESC, r.id DESC LIMIT ? OFFSET ?
                     """,
