@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -26,6 +27,8 @@ from .selectors import (
     js_string,
 )
 from .text_utils import _collect_text, _merge_text_fragments, _text_from_content
+
+LOGGER = logging.getLogger(__name__)
 
 RESPONSE_POLL_INTERVAL_SECONDS = 0.5
 REFERENCE_POLL_INTERVAL_SECONDS = 0.3
@@ -176,18 +179,52 @@ CAPTCHA_DETECT_SCRIPT_TEMPLATE = r"""
   const textPattern = new RegExp(__CAPTCHA_TEXT_PATTERN__);
   const textMatch = textPattern.test(bodyText);
   const iframePatterns = __CAPTCHA_IFRAME_PATTERNS__;
-  const iframeMatch = [...document.querySelectorAll('iframe')].some(iframe => {
+  // 验证 SDK 可能常驻隐藏的验证 iframe（display:none 预加载），
+  // 只有可见且有实际尺寸的 iframe 才算命中。
+  let iframeMatch = false;
+  const matchedIframeSrcs = [];
+  for (const iframe of document.querySelectorAll('iframe')) {
     const src = (iframe.src || iframe.getAttribute('src') || '').toLowerCase();
-    return iframePatterns.some(pattern => src.includes(pattern));
-  });
+    if (!iframePatterns.some(pattern => src.includes(pattern))) continue;
+    if (!visible(iframe)) continue;
+    const iframeBox = iframe.getBoundingClientRect();
+    if (iframeBox.width < 100 || iframeBox.height < 60) continue;
+    iframeMatch = true;
+    if (matchedIframeSrcs.length < 5) matchedIframeSrcs.push(src.slice(0, 200));
+  }
   const captchaSelectors = __CAPTCHA_DOM_SELECTORS__;
   const overlayNodes = captchaSelectors
     .flatMap(selector => [...document.querySelectorAll(selector)])
     .filter(visible);
   let imageGridMatch = false;
+  let imageGridMaxCount = 0;
+  let imageGridInfo = '';
   let dragHandleMatch = false;
+  let fullscreenOverlayMatch = false;
+  const overlayInfo = [];
   for (const node of overlayNodes) {
+    if (overlayInfo.length < 5) {
+      const nodeId = node.id ? '#' + node.id : '';
+      const nodeClass = String(node.className || '').replace(/\s+/g, '.').slice(0, 80);
+      overlayInfo.push(node.tagName.toLowerCase() + nodeId + (nodeClass ? '.' + nodeClass : ''));
+    }
+    const nodeStyle = getComputedStyle(node);
+    const nodeBox = node.getBoundingClientRect();
+    // 字节验证中心等风控遮罩：fixed/absolute 全屏覆盖（如 #captcha_container），
+    // 遮住整个聊天页，使发送按钮被禁用或点击不可达。
+    // 额外要求带遮罩背景或内含可见 iframe，排除常驻的透明全屏容器。
+    const nodeBg = nodeStyle.backgroundColor || '';
+    const hasDimBackground = nodeBg !== '' && nodeBg !== 'transparent'
+      && !/^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/.test(nodeBg);
+    const hasVisibleIframe = [...node.querySelectorAll('iframe')].some(visible);
+    if ((nodeStyle.position === 'fixed' || nodeStyle.position === 'absolute')
+      && nodeBox.width >= window.innerWidth * 0.8
+      && nodeBox.height >= window.innerHeight * 0.8
+      && (hasDimBackground || hasVisibleIframe)) {
+      fullscreenOverlayMatch = true;
+    }
     const imgs = [...node.querySelectorAll('img')].filter(visible);
+    if (imgs.length > imageGridMaxCount) imageGridMaxCount = imgs.length;
     if (imgs.length >= 6) {
       imageGridMatch = true;
     }
@@ -197,18 +234,23 @@ CAPTCHA_DETECT_SCRIPT_TEMPLATE = r"""
     }
   }
   if (!imageGridMatch) {
-    const visibleImgs = [...document.querySelectorAll('img')].filter(visible);
-    const parentCounts = new Map();
-    for (const img of visibleImgs) {
-      let parent = img.parentElement;
-      while (parent && parent !== document.body) {
-        parentCounts.set(parent, (parentCounts.get(parent) || 0) + 1);
-        parent = parent.parentElement;
-      }
+    // 全局兜底：九宫格验证码的特征是同一容器里 ≥6 张同尺寸大图，
+    // 普通聊天页的头像/图标尺寸不一且偏小（≤48px），不会命中。
+    // 注意跨域 iframe（字节验证中心）里的图片顶层 DOM 看不到，
+    // 这条只对内联验证码（如 geetest）有意义。
+    const sizeGroups = new Map();
+    for (const img of document.querySelectorAll('img')) {
+      if (!visible(img)) continue;
+      const imgBox = img.getBoundingClientRect();
+      if (imgBox.width < 56 || imgBox.height < 56) continue;
+      const sizeKey = Math.round(imgBox.width) + 'x' + Math.round(imgBox.height);
+      sizeGroups.set(sizeKey, (sizeGroups.get(sizeKey) || 0) + 1);
     }
-    for (const [parent, count] of parentCounts) {
-      if (count >= 6 && visible(parent)) {
+    for (const [sizeKey, count] of sizeGroups) {
+      if (count > imageGridMaxCount) imageGridMaxCount = count;
+      if (count >= 6) {
         imageGridMatch = true;
+        imageGridInfo = sizeKey + ' x ' + count;
         break;
       }
     }
@@ -218,7 +260,12 @@ CAPTCHA_DETECT_SCRIPT_TEMPLATE = r"""
     iframeMatch,
     imageGridMatch,
     dragHandleMatch,
-    overlayVisible: overlayNodes.length > 0
+    fullscreenOverlayMatch,
+    overlayVisible: overlayNodes.length > 0,
+    matchedIframeSrcs,
+    overlayInfo,
+    imageGridMaxCount,
+    imageGridInfo
   };
 })()
 """
@@ -806,7 +853,10 @@ class EmbeddedBrowserClient:
             })()
             """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors)
         composer_selectors = js_selector_list(self.platform.selectors["composer"])
-        textarea_empty_script = r"""
+        # 发送确认：输入框清空，或回答开始生成（发送按钮变成停止/加载态）。
+        # 慢网络下豆包要等服务器确认才清空输入框，只看清空会把
+        # "实际已发出"误判为发送失败，因此回答生成也算发送成功。
+        message_accepted_script = r"""
             (() => {
               const visible = node => {
                 if (!node) return false;
@@ -816,6 +866,16 @@ class EmbeddedBrowserClient:
                   && style.visibility !== 'hidden'
                   && box.width > 0 && box.height > 0;
               };
+              const sendSelectors = __SEND_BUTTON_SELECTORS__;
+              const sendButton = sendSelectors
+                .map(selector => document.querySelector(selector))
+                .find(node => node);
+              const answerStarted = Boolean(sendButton) && (
+                sendButton.getAttribute('data-loading') === 'true'
+                || sendButton.getAttribute('aria-busy') === 'true'
+                || (sendButton.getAttribute('aria-label') || '').includes('停止')
+              );
+              if (answerStarted) return true;
               const selectors = __COMPOSER_SELECTORS__;
               const textarea = selectors.flatMap(selector =>
                 [...document.querySelectorAll(selector)]
@@ -826,7 +886,9 @@ class EmbeddedBrowserClient:
               }
               return textarea.value === '';
             })()
-            """.replace("__COMPOSER_SELECTORS__", composer_selectors)
+            """.replace("__SEND_BUTTON_SELECTORS__", send_button_selectors).replace(
+            "__COMPOSER_SELECTORS__", composer_selectors
+        )
 
         async def try_click_send() -> bool:
             ready = await self._wait_for_condition(
@@ -842,8 +904,8 @@ class EmbeddedBrowserClient:
             if not sent:
                 return False
             return await self._wait_for_condition(
-                textarea_empty_script,
-                timeout=2.0,
+                message_accepted_script,
+                timeout=5.0,
                 interval=0.1,
             )
 
@@ -878,8 +940,8 @@ class EmbeddedBrowserClient:
             if not sent:
                 return False
             return await self._wait_for_condition(
-                textarea_empty_script,
-                timeout=3.0,
+                message_accepted_script,
+                timeout=5.0,
                 interval=0.1,
             )
 
@@ -887,6 +949,15 @@ class EmbeddedBrowserClient:
             return
         if await try_press_enter():
             return
+        # 慢网络兜底：再给最后一次确认机会，消息可能已被服务器接收，
+        # 只是输入框清空/状态刷新来得晚。
+        if await self._wait_for_condition(message_accepted_script, timeout=3.0, interval=0.2):
+            return
+        # 发送失败时区分场景：若页面正被人机验证遮罩覆盖（输入区被禁用），
+        # 按验证码流程处理，让调度器暂停账号并提醒人工，而不是按普通失败重试。
+        if await self._has_visual_captcha():
+            self._mark_needs_captcha("发送失败时检测到人机验证")
+            raise RuntimeError(f"{self.platform.name}发送失败：检测到人机验证，请处理验证后重试")
         raise RuntimeError(f"{self.platform.name}发送按钮尚未就绪，关键词没有发送")
 
     def _mark_needs_captcha(self, reason: str = "") -> None:
@@ -942,10 +1013,35 @@ class EmbeddedBrowserClient:
 
     async def _has_visual_captcha(self) -> bool:
         detected = await self._detect_captcha()
-        return any(
+        hit = any(
             detected.get(key)
-            for key in ("textMatch", "iframeMatch", "imageGridMatch", "dragHandleMatch")
+            for key in (
+                "textMatch",
+                "iframeMatch",
+                "imageGridMatch",
+                "dragHandleMatch",
+                "fullscreenOverlayMatch",
+            )
         )
+        if hit:
+            # 命中时输出命中的信号与证据（iframe src、遮罩节点、图片数），
+            # 便于从日志直接判断是真实验证还是误报。
+            LOGGER.warning(
+                "账号 %s 检测到疑似人机验证：textMatch=%s iframeMatch=%s "
+                "imageGridMatch=%s dragHandleMatch=%s fullscreenOverlayMatch=%s "
+                "matchedIframeSrcs=%s overlayInfo=%s imageGridMaxCount=%s imageGridInfo=%s",
+                self.account_id,
+                detected.get("textMatch"),
+                detected.get("iframeMatch"),
+                detected.get("imageGridMatch"),
+                detected.get("dragHandleMatch"),
+                detected.get("fullscreenOverlayMatch"),
+                detected.get("matchedIframeSrcs"),
+                detected.get("overlayInfo"),
+                detected.get("imageGridMaxCount"),
+                detected.get("imageGridInfo"),
+            )
+        return hit
 
     async def _debug_snapshot(self) -> dict[str, Any]:
         """Capture a lightweight snapshot of the current page for debugging."""
@@ -1064,7 +1160,11 @@ class EmbeddedBrowserClient:
                 bool(page_login.get("loggedIn")) if isinstance(page_login, dict) else False
             )
             if isinstance(page_login, dict):
-                self._needs_captcha = bool(page_login.get("hasCaptcha"))
+                # 文本检测（body.innerText）之外，再跑结构化检测（iframe src /
+                # 全屏遮罩 DOM）。字节验证中心的验证内容在跨域 iframe 里，
+                # 主文档文本完全不可见，纯文本检测永远漏掉它。
+                visual_captcha = await self._has_visual_captcha()
+                self._needs_captcha = bool(page_login.get("hasCaptcha")) or visual_captcha
             page_ready = (
                 bool(page_login.get("ready") and page_login.get("hasComposer"))
                 if isinstance(page_login, dict)
@@ -1166,13 +1266,29 @@ class EmbeddedBrowserClient:
                 await self._activate_for_automation()
                 if fresh_conversation:
                     await self._ensure_new_conversation()
+                # 发送前先检测人机验证遮罩：验证弹出时豆包会禁用输入区，
+                # 继续填词/点发送只会撞墙超时，还会让任务被误判为普通失败。
+                if await self._has_visual_captcha():
+                    self._mark_needs_captcha("发送前检测到人机验证")
+                    raise RuntimeError(
+                        f"{self.platform.name}检测到人机验证，关键词未发送，请处理验证后重试"
+                    )
                 if self.platform.response_capture_url_patterns:
                     capture_script = _build_capture_script(
                         self.platform.response_capture_url_patterns
                     )
                     await self._run_script(capture_script)
                 await self._type_prompt(prompt)
-                await self._submit_prompt(prompt)
+                try:
+                    await self._submit_prompt(prompt)
+                except RuntimeError:
+                    if self._needs_captcha:
+                        raise
+                    # 慢网络或新对话未水合时 React 状态可能没跟上（文字已填入
+                    # 但按钮一直禁用），重新填词再试一轮，而不是直接判失败。
+                    LOGGER.info("账号 %s 发送未被确认，重新填词后重试一次", self.account_id)
+                    await self._type_prompt(prompt)
+                    await self._submit_prompt(prompt)
                 self._script_timeout_streak = 0
                 if not await self._ping_page():
                     self._mark_needs_captcha("页面 JavaScript 无响应")

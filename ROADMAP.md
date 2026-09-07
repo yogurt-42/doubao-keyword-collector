@@ -38,6 +38,7 @@
 | 27 | 桌面端加载速度优化（SQLite 索引、聚合查询缓存、非阻塞后端初始化）+ 记忆化账号启动/隐藏状态恢复 + 调度器自动拉起未启动账号 | `research_store.py`, `account_manager.py`, `config.py`, `native_dashboard.py`, `research_scheduler.py`, `desktop.py`, `windows_entry.py` |
 | 28 | 新建任务支持勾选平台自动生成多任务：桌面/Web 平台多选、按平台拆分创建、账号随平台自动筛选；定时任务模板支持多平台（`ai_platforms_json`）；API 兼容旧 `ai_platform` 字段 | `native_dashboard.py`, `research_store.py`, `research_scheduler.py`, `models.py`, `server.py`, `static/index.html` |
 | 29 | 同一关键词重复采集（轮次）：任务/模板支持"每个关键词采集次数"（repeat_count，1-50）与"轮次间等待时间"（round_interval_seconds）；按轮次交错展开 task 并记录 round_number；结果页/导出增加轮次列；任务卡片显示轮次进度与验证风险提示 | `research_store.py`, `models.py`, `server.py`, `native_dashboard.py`, `research_export.py`, `tests/` |
+| 30 | 验证码遮罩检测彻底修复：DOM 选择器补 `[id*=...]` 覆盖字节验证中心 `#captcha_container`，新增全屏遮罩信号（fullscreenOverlayMatch）；`inspect_session_state` 合并结构化检测；chat 填词前/发送失败拦截并走风控暂停+提醒；任务失败自动截图+页面快照存 `logs/failures/`；检测命中输出证据日志（iframe src/遮罩节点/图片数），iframe 与全屏遮罩信号加可见性门槛防误报 | `platforms/doubao.py`, `platforms/deepseek.py`, `embedded_browser_client.py`, `research_scheduler.py`, `tests/` |
 
 > 各阶段技术细节参见 `CLAUDE.md` 与 `AI_REFERENCE.md`。
 

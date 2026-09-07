@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -437,6 +439,82 @@ async def test_scheduler_releases_account_after_task_timeout(monkeypatch) -> Non
 
     assert ("task-1", False) in store.failed
     assert "账号1" not in scheduler._busy_accounts
+
+
+class RiskErrorClient(FakeClient):
+    """chat() 直接抛出带“人机验证”字样的错误（发送前拦截路径）。"""
+
+    def __init__(self) -> None:
+        self._needs_captcha = False
+
+    async def chat(self, messages: list[dict[str, str]], **_: Any) -> dict[str, Any]:
+        self._needs_captcha = True
+        raise RuntimeError("豆包检测到人机验证，关键词未发送，请处理验证后重试")
+
+    async def screenshot(self) -> bytes:
+        return b"\x89PNG-fake"
+
+    async def _debug_snapshot(self) -> dict[str, Any]:
+        return {
+            "url": "https://www.doubao.com/chat/",
+            "fullscreenOverlayMatch": True,
+        }
+
+
+class RiskErrorPool:
+    def __init__(self) -> None:
+        self.store = FakeSettingsStore(auto_start_all_accounts=False)
+        self.client = RiskErrorClient()
+        self.account = type("Account", (), {"client": self.client})()
+
+    def discover_account_ids(self) -> list[str]:
+        return ["账号1"]
+
+    def get_if_started(self, account_id: str) -> Any:
+        return self.account
+
+
+@pytest.mark.asyncio
+async def test_scheduler_pauses_alerts_and_saves_artifact_on_captcha_error(
+    tmp_path: Path,
+) -> None:
+    store = CaptchaStore()
+    store.path = tmp_path / "data" / "research.db"
+    pool = RiskErrorPool()
+    scheduler = ResearchScheduler(store, pool)  # type: ignore[arg-type]
+    callback_calls: list[str] = []
+    scheduler.on_captcha_callback = callback_calls.append
+
+    await scheduler._dispatch_due_tasks()
+    await asyncio.gather(*list(scheduler._workers))
+
+    assert ("task-1", False) in store.failed
+    assert any(
+        call[0] == "账号1" and call[1] == 1800 and "验证" in call[2] for call in store.pause_calls
+    )
+    assert "账号1" in callback_calls
+
+    failures_dir = tmp_path / "data" / "logs" / "failures"
+    screenshots = list(failures_dir.glob("task-task-1-*.png"))
+    snapshots = list(failures_dir.glob("task-task-1-*.json"))
+    assert screenshots, "失败现场截图未保存"
+    assert snapshots, "失败现场快照未保存"
+    payload = json.loads(snapshots[0].read_text(encoding="utf-8"))
+    assert payload["fullscreenOverlayMatch"] is True
+
+
+@pytest.mark.asyncio
+async def test_capture_failure_artifact_is_best_effort(tmp_path: Path) -> None:
+    """客户端不支持截图/快照时不得抛异常，也不应产出文件。"""
+
+    store = FakeStore()
+    store.path = tmp_path / "data" / "research.db"
+    scheduler = ResearchScheduler(store, FakePool())  # type: ignore[arg-type]
+
+    await scheduler._capture_failure_artifact(store.tasks[0], "账号1")
+
+    failures_dir = tmp_path / "data" / "logs" / "failures"
+    assert not failures_dir.exists() or not list(failures_dir.iterdir())
 
 
 class LRUAccountPool:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -305,6 +306,37 @@ class ResearchScheduler:
                 self._selection_wait_reason = f"账号 {account_id} 暂不可用：{exc}"
         return None
 
+    async def _capture_failure_artifact(self, task: dict[str, Any], account_id: str) -> None:
+        """Save a screenshot and a page snapshot when a task fails.
+
+        Artifacts land in ``<data_root>/logs/failures/`` so page-state bugs
+        (captcha overlays, layout changes, stuck loads) can be diagnosed from
+        the saved snapshot instead of guesswork. Best-effort: never raises.
+        """
+        try:
+            account = self.account_pool.get_if_started(account_id)
+            client = getattr(account, "client", None) if account is not None else None
+            if client is None:
+                return
+            failures_dir = self.store.path.parent / "logs" / "failures"
+            failures_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            screenshot_fn = getattr(client, "screenshot", None)
+            if callable(screenshot_fn):
+                image = await asyncio.wait_for(screenshot_fn(), timeout=5)
+                if image:
+                    (failures_dir / f"task-{task['id']}-{stamp}.png").write_bytes(image)
+            snapshot_fn = getattr(client, "_debug_snapshot", None)
+            if callable(snapshot_fn):
+                snapshot = await asyncio.wait_for(snapshot_fn(), timeout=5)
+                if snapshot:
+                    (failures_dir / f"task-{task['id']}-{stamp}.json").write_text(
+                        json.dumps(snapshot, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+        except Exception:
+            LOGGER.debug("采集失败现场截图/快照未能保存", exc_info=True)
+
     async def _run_task(self, task: dict[str, Any], account_id: str) -> None:
         if self._is_job_cancelled(task["job_id"]):
             self.store.fail_or_retry_task(task["id"], "任务已取消", retry=False)
@@ -397,16 +429,21 @@ class ResearchScheduler:
         except (TimeoutError, asyncio.TimeoutError):
             message = f"采集超过 {TASK_TIMEOUT_SECONDS // 60} 分钟未完成，已自动结束本次尝试"
             self.store.pause_account(account_id, 60, message)
+            await self._capture_failure_artifact(task, account_id)
             retry = task["attempt_count"] + 1 < task["max_attempts"]
             self.store.fail_or_retry_task(task["id"], message, retry=retry)
         except Exception as exc:
             risk = _is_risk_error(exc)
             if risk:
                 self.store.pause_account(account_id, 1800, f"疑似验证码或风控：{exc}")
+                if self.on_captcha_callback:
+                    with contextlib.suppress(Exception):
+                        self.on_captcha_callback(account_id)
             elif isinstance(exc, ReferenceExpansionError):
                 self.store.pause_account(account_id, 60, f"参考资料展开不完整：{exc}")
             elif "超时" in str(exc):
                 self.store.pause_account(account_id, 60, f"页面响应超时：{exc}")
+            await self._capture_failure_artifact(task, account_id)
             retry = task["attempt_count"] + 1 < task["max_attempts"]
             self.store.fail_or_retry_task(task["id"], str(exc), retry=retry)
         finally:

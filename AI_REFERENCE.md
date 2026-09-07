@@ -424,9 +424,15 @@ research_schedules (
 
 ### 7.3 验证码/风控处理
 
-- `embedded_browser_client.py` 通过 body 文本、iframe URL、九宫格图片容器、拖拽元素等多路检测验证码。
-- `chat()` 检测到验证码后不再抛异常，而是设置 `self._needs_captcha = True` 并继续等待。
-- `research_scheduler.py` 的 `_run_task()` 每 3 秒检查 `_needs_captcha`，一旦为真立即 `pause_account(account_id, 1800, reason)`，同时触发 UI 跳转到该账号标签页。
+- 检测信号（`build_captcha_detect_script()`）：body 文本、可见且有实际尺寸的 iframe URL（隐藏预加载 iframe 不计，防误报）、DOM 选择器（`[class*=...]` 与 `[id*=...]`，覆盖字节验证中心 `#captcha_container`）、九宫格图片（≥6 张同尺寸大图，边长 ≥56px；跨域 iframe 内的图顶层 DOM 看不到，此信号只针对内联验证码）、拖拽元素、fixed/absolute 全屏遮罩（`fullscreenOverlayMatch`，宽高 ≥ 视口 80% 且带遮罩背景或内含可见 iframe）。命中时 WARNING 日志输出各信号值与证据（`matchedIframeSrcs`/`overlayInfo`/`imageGridMaxCount`/`imageGridInfo`），用于快速区分真实验证与误报。
+- 检测时机：
+  1. `inspect_session_state()`：文本检测与结构化检测合并判定 `needs_captcha`（验证内容在跨域 iframe 内，主文档文本不可见，纯文本检测必然漏检）。
+  2. `chat()` 填词前：命中即抛带“人机验证”字样的 `RuntimeError`，关键词不发送。
+  3. `_submit_prompt()` 发送失败时：先跑结构化检测，命中按验证码流程处理而非普通失败。
+  4. 回答轮询中：body 文本命中，或停滞看门狗（`CAPTCHA_STALL_SECONDS`）触发结构化复检。
+- 轮询期间检测到验证码后 `chat()` 不抛异常，而是设置 `self._needs_captcha = True` 并继续等待（发送前/发送失败两个拦截点除外，它们直接抛错）。
+- `research_scheduler.py` 的 `_run_task()` 每 3 秒检查 `_needs_captcha`，一旦为真立即 `pause_account(account_id, 1800, reason)`，同时触发 UI 跳转到该账号标签页；错误文本命中风控关键词（`_is_risk_error`）时同样暂停 1800 秒并触发 `on_captcha_callback` 提醒。
+- 任务失败（超时或异常）自动调用 `_capture_failure_artifact()`：页面截图 + `_debug_snapshot()` 快照存到 `{data_root}/logs/failures/task-{id}-{时间戳}.png/.json`，便于事后定位页面状态类 bug；best-effort，自身不抛异常。
 - 用户点击账号卡片“验证已完成”后，`reset_captcha()` + `resume_account()` + `scheduler.wake()`，原提问继续执行。
 
 ### 7.4 平台类型回填

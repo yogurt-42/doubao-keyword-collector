@@ -165,6 +165,100 @@ class NewAccountBridge(QtJsonBridge):
         )
 
 
+class FullscreenCaptchaBridge(FakeBridge):
+    """Simulates a page covered by the Bytedance verify-center fullscreen overlay.
+
+    The overlay lives in a cross-origin iframe (#captcha_container), so body
+    text never mentions it; only the structural detection script can see it.
+    """
+
+    async def run_javascript(self, account_name: str, script: str) -> Any:
+        self.scripts.append(script)
+        if "fullscreenOverlayMatch" in script:
+            return {
+                "textMatch": False,
+                "iframeMatch": True,
+                "imageGridMatch": False,
+                "dragHandleMatch": False,
+                "fullscreenOverlayMatch": True,
+                "overlayVisible": True,
+            }
+        return await super().run_javascript(account_name, script)
+
+
+class VisualCaptchaStateBridge(QtJsonBridge):
+    """Logged-in page state plus a structural captcha hit on the detect script."""
+
+    async def run_javascript(self, account_name: str, script: str) -> Any:
+        self.scripts.append(script)
+        if "fullscreenOverlayMatch" in script:
+            value: Any = {
+                "textMatch": False,
+                "iframeMatch": True,
+                "imageGridMatch": False,
+                "dragHandleMatch": False,
+                "fullscreenOverlayMatch": True,
+                "overlayVisible": True,
+            }
+            return json.dumps({"__doubaoBridge": True, "ok": True, "value": value})
+        return await super().run_javascript(account_name, script)
+
+
+class SendFailCaptchaBridge(FakeBridge):
+    """Send button never becomes ready; captcha overlay appears after the failure.
+
+    The first structural check (pre-send) reports no captcha; the second one
+    (after the send failure) reports the fullscreen overlay.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.captcha_checks = 0
+
+    async def run_javascript(self, account_name: str, script: str) -> Any:
+        self.scripts.append(script)
+        if "fullscreenOverlayMatch" in script:
+            self.captcha_checks += 1
+            hit = self.captcha_checks >= 2
+            return {
+                "textMatch": False,
+                "iframeMatch": hit,
+                "imageGridMatch": False,
+                "dragHandleMatch": False,
+                "fullscreenOverlayMatch": hit,
+                "overlayVisible": hit,
+            }
+        if "#flow-end-msg-send" in script and "return Boolean(button" in script:
+            return False
+        if "KeyboardEvent" in script:
+            return False
+        if "answerStarted" in script:
+            return False
+        return await super().run_javascript(account_name, script)
+
+
+class FlakySendBridge(FakeBridge):
+    """第一轮发送全部未确认（React 状态丢失），重填词后的第二轮正常。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.type_count = 0
+
+    async def run_javascript(self, account_name: str, script: str) -> Any:
+        self.scripts.append(script)
+        if "beforeinput" in script:
+            self.type_count += 1
+            return await super().run_javascript(account_name, script)
+        if self.type_count <= 1:
+            if "#flow-end-msg-send" in script and "return Boolean(button" in script:
+                return False
+            if "KeyboardEvent" in script:
+                return False
+            if "answerStarted" in script:
+                return False
+        return await super().run_javascript(account_name, script)
+
+
 class DelayedReadyBridge(FakeBridge):
     """Simulates a page where textarea and send button become ready after checks."""
 
@@ -324,3 +418,127 @@ async def test_chat_waits_for_textarea_and_send_button(tmp_path: Path) -> None:
     assert bridge.textarea_checks >= 2
     assert bridge.send_button_checks >= 2
     assert bridge.activation_count == 1
+
+
+@pytest.mark.asyncio
+async def test_chat_aborts_before_typing_when_captcha_overlay_present(
+    tmp_path: Path,
+) -> None:
+    bridge = FullscreenCaptchaBridge()
+    client = EmbeddedBrowserClient(
+        bridge=bridge,
+        user_data_dir=tmp_path,
+        account_id="账号1",
+    )
+
+    await client.start()
+    with pytest.raises(RuntimeError, match="人机验证"):
+        await client.chat(
+            [{"role": "user", "content": "验证码遮挡测试关键词"}],
+            fresh_conversation=True,
+            collect_thinking_references=True,
+        )
+
+    assert client._needs_captcha is True
+    # 关键词绝不能被填进输入框：遮罩期间填写/点击只会触发更深的风控
+    assert "验证码遮挡测试关键词" not in "\n".join(bridge.scripts)
+
+
+@pytest.mark.asyncio
+async def test_session_state_flags_visual_captcha_even_when_body_text_is_clean(
+    tmp_path: Path,
+) -> None:
+    bridge = VisualCaptchaStateBridge()
+    client = EmbeddedBrowserClient(
+        bridge=bridge,
+        user_data_dir=tmp_path,
+        account_id="账号1",
+    )
+
+    await client.start()
+    state = await client.inspect_session_state()
+
+    assert state["logged_in"] is True
+    assert state["needs_captcha"] is True
+    assert state["chat_ready"] is False
+    assert state["chat_ready_reason"] == "需要处理人机验证"
+
+
+@pytest.mark.asyncio
+async def test_send_failure_escalates_to_captcha_error_when_overlay_detected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "doubao2api.embedded_browser_client.SEND_BUTTON_READY_TIMEOUT_SECONDS",
+        0.3,
+    )
+    bridge = SendFailCaptchaBridge()
+    client = EmbeddedBrowserClient(
+        bridge=bridge,
+        user_data_dir=tmp_path,
+        account_id="账号1",
+    )
+
+    await client.start()
+    with pytest.raises(RuntimeError, match="发送失败：检测到人机验证"):
+        await client.chat(
+            [{"role": "user", "content": "发送失败测试关键词"}],
+            fresh_conversation=True,
+        )
+
+    assert client._needs_captcha is True
+    # 错误信息带“验证”字样，调度器才能按风控流程暂停账号而不是普通重试
+    assert bridge.captcha_checks >= 2
+
+
+@pytest.mark.asyncio
+async def test_visual_captcha_hit_logs_evidence(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """命中时必须输出信号值与证据字段，便于从日志区分真实验证与误报。"""
+
+    bridge = FullscreenCaptchaBridge()
+    client = EmbeddedBrowserClient(
+        bridge=bridge,
+        user_data_dir=tmp_path,
+        account_id="账号1",
+    )
+
+    await client.start()
+    with caplog.at_level("WARNING", logger="doubao2api.embedded_browser_client"):
+        assert await client._has_visual_captcha() is True
+
+    assert "fullscreenOverlayMatch=True" in caplog.text
+    assert "matchedIframeSrcs" in caplog.text
+    assert "overlayInfo" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_chat_retypes_and_retries_when_send_unconfirmed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """第一轮发送未确认（React 状态丢失）时应重填词重试，而不是直接判失败。"""
+
+    monkeypatch.setattr(
+        "doubao2api.embedded_browser_client.SEND_BUTTON_READY_TIMEOUT_SECONDS",
+        0.5,
+    )
+    bridge = FlakySendBridge()
+    client = EmbeddedBrowserClient(
+        bridge=bridge,
+        user_data_dir=tmp_path,
+        account_id="账号1",
+    )
+
+    await client.start()
+    result = await client.chat(
+        [{"role": "user", "content": "重填重试测试关键词"}],
+        fresh_conversation=True,
+        collect_thinking_references=True,
+    )
+
+    assert result["text"] == "回答完成"
+    assert bridge.type_count == 2

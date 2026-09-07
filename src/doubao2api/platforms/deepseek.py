@@ -80,7 +80,9 @@ CAPTCHA_IFRAME_PATTERNS = [
 
 CAPTCHA_DOM_SELECTORS = [
     '[class*="captcha"]',
+    '[id*="captcha"]',
     '[class*="verify"]',
+    '[id*="verify"]',
     '[class*="verification"]',
     '[class*="hcaptcha"]',
     '[class*="recaptcha"]',
