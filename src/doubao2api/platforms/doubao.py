@@ -29,9 +29,9 @@ SELECTORS = {
         "textarea",
     ],
     # Send button.  Tried in order until one is found and enabled.
+    # 注：豆包 2026-09 已移除全部 data-testid 属性，#flow-end-msg-send 仍保留。
     "send_button": [
         "#flow-end-msg-send",
-        '[data-testid="send-button"]',
         'button[aria-label*="发送"]',
     ],
     # Reference / thinking result anchor rows.
@@ -46,9 +46,9 @@ SELECTORS = {
     # Buttons/areas that expand the thinking box / reference summary.
     # New Doubao Tailwind layout uses a cursor-pointer summary row;
     # old layout used explicit collapse buttons.
+    # 注：豆包 2026-09 已移除全部 data-testid 属性。
     "reference_expand": [
         f"xpath={THINKING_EXPAND_XPATH}",
-        '[data-testid="collapse_button"]',
         '[class*="collapse-collapse-button"]',
         '[data-copy-ignore][class*="cursor-pointer"]',
         '[class*="cursor-pointer"]',

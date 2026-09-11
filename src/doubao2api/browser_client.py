@@ -561,9 +561,19 @@ class BrowserClient:
                 break
 
         if expected and len(rows) < expected:
-            raise ReferenceExpansionError(
-                f"参考资料未完整展开：页面标明 {expected} 篇，实际识别到 {len(rows)} 篇"
-            )
+            # 豆包 2026-09 起参考资料最多只渲染前 15 条（有时滚动后能多加载
+            # 几条），剩余条目页面上不存在，无法采集。此时不再判任务失败，
+            # 有多少算多少；只有一条都没识别到才认为展开真的失败。
+            if rows:
+                LOGGER.info(
+                    "页面标明 %d 篇参考资料，豆包最多展示前若干条，实际采集 %d 篇，剩余忽略",
+                    expected,
+                    len(rows),
+                )
+            else:
+                raise ReferenceExpansionError(
+                    f"参考资料展开失败：页面标明 {expected} 篇，实际识别到 0 篇"
+                )
         if not rows and has_summary:
             raise ReferenceExpansionError(
                 "参考资料未识别到任何链接：页面存在参考摘要但展开或解析失败"

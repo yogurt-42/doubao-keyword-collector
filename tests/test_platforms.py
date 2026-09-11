@@ -67,3 +67,19 @@ def test_captcha_detect_script_grid_fallback_requires_uniform_large_images() -> 
     script = build_captcha_detect_script(DOUBAO_PLATFORM)
     assert "imageGridInfo" in script
     assert "56" in script  # 边长门槛，头像/图标一般 ≤48px
+
+
+def test_captcha_text_scan_is_scoped_to_dialog_layers() -> None:
+    """文本扫描必须限定在弹层节点内：整页扫会把回答正文里的业务词汇误判为验证码。"""
+
+    from doubao2api.embedded_browser_client import _build_login_state_script
+
+    for script in (
+        build_captcha_detect_script(DOUBAO_PLATFORM),
+        _build_login_state_script(DOUBAO_PLATFORM),
+    ):
+        # 占位符必须已被替换为弹层选择器
+        assert "__CAPTCHA_TEXT_SCOPE__" not in script
+        assert "role=" in script  # [role="dialog"]/[role="alertdialog"]（json 转义后）
+    detect = build_captcha_detect_script(DOUBAO_PLATFORM)
+    assert "textMatchSource" in detect  # 命中时附文本证据

@@ -289,6 +289,46 @@ class DelayedReadyBridge(FakeBridge):
         return await super().run_javascript(account_name, script)
 
 
+class SilentVerifyBridge(FakeBridge):
+    """豆包静默验证：verifycenter iframe 出现一次，数秒后自动消失。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.captcha_checks = 0
+
+    async def run_javascript(self, account_name: str, script: str) -> Any:
+        self.scripts.append(script)
+        if "fullscreenOverlayMatch" in script:
+            self.captcha_checks += 1
+            hit = self.captcha_checks == 1
+            return {
+                "textMatch": False,
+                "iframeMatch": hit,
+                "imageGridMatch": False,
+                "dragHandleMatch": False,
+                "fullscreenOverlayMatch": hit,
+                "overlayVisible": hit,
+            }
+        return await super().run_javascript(account_name, script)
+
+
+class PersistentWeakCaptchaBridge(FakeBridge):
+    """弱信号持续存在（如 iframe/遮罩 4 秒后仍未消失），应确认为真实验证。"""
+
+    async def run_javascript(self, account_name: str, script: str) -> Any:
+        self.scripts.append(script)
+        if "fullscreenOverlayMatch" in script:
+            return {
+                "textMatch": False,
+                "iframeMatch": True,
+                "imageGridMatch": False,
+                "dragHandleMatch": False,
+                "fullscreenOverlayMatch": True,
+                "overlayVisible": True,
+            }
+        return await super().run_javascript(account_name, script)
+
+
 @pytest.mark.asyncio
 async def test_chat_follows_visible_doubao_controls(tmp_path: Path) -> None:
     bridge = FakeBridge()
@@ -423,7 +463,12 @@ async def test_chat_waits_for_textarea_and_send_button(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_chat_aborts_before_typing_when_captcha_overlay_present(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "doubao2api.embedded_browser_client.CAPTCHA_WEAK_CONFIRM_DELAY_SECONDS",
+        0.1,
+    )
     bridge = FullscreenCaptchaBridge()
     client = EmbeddedBrowserClient(
         bridge=bridge,
@@ -447,7 +492,12 @@ async def test_chat_aborts_before_typing_when_captcha_overlay_present(
 @pytest.mark.asyncio
 async def test_session_state_flags_visual_captcha_even_when_body_text_is_clean(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        "doubao2api.embedded_browser_client.CAPTCHA_WEAK_CONFIRM_DELAY_SECONDS",
+        0.1,
+    )
     bridge = VisualCaptchaStateBridge()
     client = EmbeddedBrowserClient(
         bridge=bridge,
@@ -473,6 +523,10 @@ async def test_send_failure_escalates_to_captcha_error_when_overlay_detected(
         "doubao2api.embedded_browser_client.SEND_BUTTON_READY_TIMEOUT_SECONDS",
         0.3,
     )
+    monkeypatch.setattr(
+        "doubao2api.embedded_browser_client.CAPTCHA_WEAK_CONFIRM_DELAY_SECONDS",
+        0.1,
+    )
     bridge = SendFailCaptchaBridge()
     client = EmbeddedBrowserClient(
         bridge=bridge,
@@ -496,9 +550,14 @@ async def test_send_failure_escalates_to_captcha_error_when_overlay_detected(
 async def test_visual_captcha_hit_logs_evidence(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """命中时必须输出信号值与证据字段，便于从日志区分真实验证与误报。"""
 
+    monkeypatch.setattr(
+        "doubao2api.embedded_browser_client.CAPTCHA_WEAK_CONFIRM_DELAY_SECONDS",
+        0.1,
+    )
     bridge = FullscreenCaptchaBridge()
     client = EmbeddedBrowserClient(
         bridge=bridge,
@@ -542,3 +601,67 @@ async def test_chat_retypes_and_retries_when_send_unconfirmed(
 
     assert result["text"] == "回答完成"
     assert bridge.type_count == 2
+
+
+@pytest.mark.asyncio
+async def test_weak_captcha_signal_auto_disappears_does_not_flag_captcha(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """仅 iframe/全屏遮罩的弱信号若数秒内消失，应判定为静默验证，不暂停账号。"""
+
+    monkeypatch.setattr(
+        "doubao2api.embedded_browser_client.CAPTCHA_WEAK_CONFIRM_DELAY_SECONDS",
+        0.1,
+    )
+    bridge = SilentVerifyBridge()
+    client = EmbeddedBrowserClient(
+        bridge=bridge,
+        user_data_dir=tmp_path,
+        account_id="账号1",
+    )
+
+    await client.start()
+    with caplog.at_level("INFO", logger="doubao2api.embedded_browser_client"):
+        assert await client._has_visual_captcha() is False
+
+    assert bridge.captcha_checks == 2
+    assert "弱人机验证信号已自动消失" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_persistent_weak_captcha_signal_confirms_captcha(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """弱信号持续存在（复查仍命中），应最终确认为真实人机验证。"""
+
+    monkeypatch.setattr(
+        "doubao2api.embedded_browser_client.CAPTCHA_WEAK_CONFIRM_DELAY_SECONDS",
+        0.1,
+    )
+    bridge = PersistentWeakCaptchaBridge()
+    client = EmbeddedBrowserClient(
+        bridge=bridge,
+        user_data_dir=tmp_path,
+        account_id="账号1",
+    )
+
+    await client.start()
+    with caplog.at_level("WARNING", logger="doubao2api.embedded_browser_client"):
+        assert await client._has_visual_captcha() is True
+
+    assert "fullscreenOverlayMatch=True" in caplog.text
+
+
+def test_captcha_detect_script_filters_zero_opacity_nodes() -> None:
+    """验证脚本包含 opacity 门槛，避免把预加载的透明验证容器/iframe 误判。"""
+
+    from doubao2api.embedded_browser_client import build_captcha_detect_script
+    from doubao2api.platforms import get_platform
+
+    script = build_captcha_detect_script(get_platform("doubao"))
+    assert "parseFloat(style.opacity)" in script
+    assert "opacity >= 0.05" in script

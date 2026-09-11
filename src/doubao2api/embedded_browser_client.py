@@ -37,8 +37,47 @@ REFERENCE_APPEAR_TIMEOUT_SECONDS = 10.0
 NEW_CONVERSATION_READY_TIMEOUT_SECONDS = 8.0
 PAGE_HEALTH_PING_TIMEOUT_SECONDS = 5.0
 MAX_SCRIPT_TIMEOUT_STREAK = 2
+# 页面脚本超时后的重试间隔与次数：吸收回答渲染/验证 SDK 活动造成的
+# 页面主线程短暂繁忙（Qt runJavaScript 偶发 6 秒无回调）。
+SCRIPT_TIMEOUT_RETRY_INTERVAL_SECONDS = 1.0
 CAPTCHA_STALL_SECONDS = 30.0
 CAPTCHA_MAX_WAIT_SECONDS = 600.0
+# 弱验证码信号（仅 iframe/全屏遮罩，无文字/图片/滑块）需要延迟复查，
+# 以过滤豆包等平台的静默验证（verifycenter iframe 出现数秒后自动消失）。
+CAPTCHA_WEAK_CONFIRM_DELAY_SECONDS = 4.0
+# 验证确认后的保持期：确认命中后该时间内直接沿用"验证存在"的结论，
+# 不重复执行检测（弱信号每次复查要 4 秒）也不重复输出 WARNING 日志。
+# 豆包批量静默验证的遮罩会持续约 1 分钟，期间账号页 10 秒周期刷新
+# 会对每个账号反复检测复查，1 分钟刷数十条 WARNING 并拖慢状态刷新。
+CAPTCHA_CONFIRMED_HOLD_SECONDS = 30.0
+
+# 文本型验证码的扫描范围：验证码 DOM 选择器之外的常见弹窗容器。
+# 文本关键词只在这些弹层节点内匹配，不再扫整页 body——
+# 否则回答正文里的“验证码/身份验证”等业务词汇会误报。
+# 注意：不能用 [class*="dialog"] / [class*="popup"] 这类 class 子串匹配——
+# 豆包新布局的 Tailwind 原子类里嵌着 aria-haspopup="dialog" 等条件选择器
+# 文本，普通按钮/容器的 class 属性值也会包含 "dialog"/"popup" 字样，
+# 实测正常聊天页有 65 个普通元素被误当弹层，扫到正文业务词汇即误报。
+CAPTCHA_DIALOG_SELECTORS = [
+    '[role="dialog"]',
+    '[role="alertdialog"]',
+    '[class*="modal"]',
+    '[class*="mask"]',
+    '[class*="overlay"]',
+    '[id*="modal"]',
+    '[id*="dialog"]',
+    '[id*="popup"]',
+]
+
+# 弹层文案长度上限：验证弹层的提示文字都很短（“请完成安全验证”等），
+# 超过该长度的节点文本视为回答正文/深度思考内容，不参与验证码文本匹配。
+CAPTCHA_TEXT_MAX_LENGTH = 200
+
+
+def _captcha_text_scope_selectors(platform: AIPlatform) -> str:
+    """Combined selector string for captcha text scanning (dialogs + captcha nodes)."""
+
+    return js_string(", ".join([*platform.captcha_dom_selectors, *CAPTCHA_DIALOG_SELECTORS]))
 
 
 # _default_platform is kept for backward compatibility but is no longer used.
@@ -172,12 +211,14 @@ CAPTCHA_DETECT_SCRIPT_TEMPLATE = r"""
     if (!node) return false;
     const style = getComputedStyle(node);
     const box = node.getBoundingClientRect();
+    // opacity:0 的节点在肉眼层面不可见，但 getBoundingClientRect 仍可能有尺寸。
+    // 字节验证中心会预加载一个全屏透明容器/iframe，必须排除这种常驻隐藏元素。
+    const opacity = parseFloat(style.opacity);
     return style.display !== 'none' && style.visibility !== 'hidden'
-      && box.width > 0 && box.height > 0;
+      && box.width > 0 && box.height > 0
+      && !Number.isNaN(opacity) && opacity >= 0.05;
   };
-  const bodyText = document.body ? (document.body.innerText || '') : '';
   const textPattern = new RegExp(__CAPTCHA_TEXT_PATTERN__);
-  const textMatch = textPattern.test(bodyText);
   const iframePatterns = __CAPTCHA_IFRAME_PATTERNS__;
   // 验证 SDK 可能常驻隐藏的验证 iframe（display:none 预加载），
   // 只有可见且有实际尺寸的 iframe 才算命中。
@@ -196,6 +237,25 @@ CAPTCHA_DETECT_SCRIPT_TEMPLATE = r"""
   const overlayNodes = captchaSelectors
     .flatMap(selector => [...document.querySelectorAll(selector)])
     .filter(visible);
+  // 文本检测只扫弹层/遮罩类节点：整页 body 扫会把回答正文里的
+  // “验证码/身份验证”等业务词汇误判为验证码。
+  let textMatch = false;
+  let textMatchSource = '';
+  const textScopeNodes = [...overlayNodes];
+  for (const node of document.querySelectorAll(__CAPTCHA_TEXT_SCOPE__)) {
+    if (visible(node)) textScopeNodes.push(node);
+  }
+  for (const node of textScopeNodes) {
+    const nodeText = tidy(node.innerText || '');
+    // 超过弹层文案长度上限的节点视为回答正文/深度思考内容，跳过——
+    // 否则正文里的“短信验证码”等业务词汇会误报。
+    if (!nodeText || nodeText.length > __CAPTCHA_TEXT_MAX_LENGTH__) continue;
+    if (textPattern.test(nodeText)) {
+      textMatch = true;
+      textMatchSource = nodeText.slice(0, 120);
+      break;
+    }
+  }
   let imageGridMatch = false;
   let imageGridMaxCount = 0;
   let imageGridInfo = '';
@@ -234,15 +294,28 @@ CAPTCHA_DETECT_SCRIPT_TEMPLATE = r"""
     }
   }
   if (!imageGridMatch) {
-    // 全局兜底：九宫格验证码的特征是同一容器里 ≥6 张同尺寸大图，
-    // 普通聊天页的头像/图标尺寸不一且偏小（≤48px），不会命中。
+    // 全局兜底：九宫格验证码的特征是同一容器里 ≥6 张同尺寸大图。
+    // 只统计祖先链上有 fixed/absolute 定位容器的图片——内联验证码
+    // （如 geetest）一定在弹层里；豆包回答区的视频封面也是一排同尺寸
+    // 大图（实测 256x192 x 6），但它们在文档流（relative/static）中，
+    // 不参与统计，否则正常回答会被误判为九宫格验证码。
     // 注意跨域 iframe（字节验证中心）里的图片顶层 DOM 看不到，
-    // 这条只对内联验证码（如 geetest）有意义。
+    // 这条只对内联验证码有意义。
+    const inFloatingLayer = node => {
+      let current = node.parentElement;
+      while (current && current !== document.body) {
+        const position = getComputedStyle(current).position;
+        if (position === 'fixed' || position === 'absolute') return true;
+        current = current.parentElement;
+      }
+      return false;
+    };
     const sizeGroups = new Map();
     for (const img of document.querySelectorAll('img')) {
       if (!visible(img)) continue;
       const imgBox = img.getBoundingClientRect();
       if (imgBox.width < 56 || imgBox.height < 56) continue;
+      if (!inFloatingLayer(img)) continue;
       const sizeKey = Math.round(imgBox.width) + 'x' + Math.round(imgBox.height);
       sizeGroups.set(sizeKey, (sizeGroups.get(sizeKey) || 0) + 1);
     }
@@ -265,7 +338,8 @@ CAPTCHA_DETECT_SCRIPT_TEMPLATE = r"""
     matchedIframeSrcs,
     overlayInfo,
     imageGridMaxCount,
-    imageGridInfo
+    imageGridInfo,
+    textMatchSource
   };
 })()
 """
@@ -278,6 +352,8 @@ def build_captcha_detect_script(platform: AIPlatform) -> str:
         )
         .replace("__CAPTCHA_IFRAME_PATTERNS__", js_selector_list(platform.captcha_iframe_patterns))
         .replace("__CAPTCHA_DOM_SELECTORS__", js_selector_list(platform.captcha_dom_selectors))
+        .replace("__CAPTCHA_TEXT_SCOPE__", _captcha_text_scope_selectors(platform))
+        .replace("__CAPTCHA_TEXT_MAX_LENGTH__", str(CAPTCHA_TEXT_MAX_LENGTH))
     )
 
 
@@ -442,9 +518,19 @@ ROBUST_LOGIN_STATE_SCRIPT_TEMPLATE = r"""
   const hasHistory = body.includes(historyText)
     && document.querySelectorAll(historyLinkSelector).length >= historyMinLinks;
 
-  // 7. Captcha / risk detection.
-  const captchaPattern = __CAPTCHA_PATTERN__;
-  const hasCaptcha = new RegExp(captchaPattern).test(body);
+  // 7. Captcha / risk detection. 只扫弹层候选节点的短文本，
+  // 避免回答正文里的“验证码/身份验证”等业务词汇误报。
+  const captchaPattern = new RegExp(__CAPTCHA_PATTERN__);
+  let hasCaptcha = false;
+  for (const node of document.querySelectorAll(__CAPTCHA_TEXT_SCOPE__)) {
+    if (!visible(node)) continue;
+    const nodeText = (node.innerText || '').replace(/\s+/g, ' ').trim();
+    if (!nodeText || nodeText.length > __CAPTCHA_TEXT_MAX_LENGTH__) continue;
+    if (captchaPattern.test(nodeText)) {
+      hasCaptcha = true;
+      break;
+    }
+  }
 
   // Final decision: positive signals win over negative signals when ambiguous.
   const loggedIn = hasUserMenu || hasLogoutControl
@@ -484,6 +570,8 @@ def _build_login_state_script(platform: AIPlatform) -> str:
         )
         .replace("__NEW_CHAT_TEXT__", js_string(selectors["new_chat"]["text"]))
         .replace("__CAPTCHA_PATTERN__", js_regex_alternation(platform.captcha_patterns))
+        .replace("__CAPTCHA_TEXT_SCOPE__", _captcha_text_scope_selectors(platform))
+        .replace("__CAPTCHA_TEXT_MAX_LENGTH__", str(CAPTCHA_TEXT_MAX_LENGTH))
         .replace("__HISTORY_TEXT__", js_string(selectors["history_indicator"]["text"]))
         .replace(
             "__HISTORY_LINK_SELECTOR__",
@@ -516,6 +604,11 @@ class EmbeddedBrowserClient:
         self._last_error_code = 0
         self._consecutive_failures = 0
         self._script_timeout_streak = 0
+        # 弱信号（仅 iframe/全屏遮罩）缓存，避免对豆包静默验证反复等待 4 秒。
+        self._captcha_weak_last_check = 0.0
+        self._captcha_weak_last_result = False
+        # 验证确认保持期：确认命中后短时间内沿用结论，不重复检测/刷日志。
+        self._captcha_confirmed_until = 0.0
 
     @property
     def started(self) -> bool:
@@ -566,12 +659,17 @@ class EmbeddedBrowserClient:
             return []
         return await self.bridge.cookies(self.account_id)
 
-    async def _run_script(self, script: str) -> Any:
+    async def _run_script(self, script: str, *, timeout_retries: int = 2) -> Any:
         """Run page JavaScript through a JSON envelope.
 
         Qt WebEngine 6.11 can turn JavaScript objects and arrays into an empty
         string in its callback. Returning JSON text keeps the value stable
         across Qt versions and is also convenient for test bridges.
+
+        页面主线程短暂繁忙（回答渲染、验证 SDK 活动、GC）时 runJavaScript
+        会偶发 6 秒无回调。默认对超时自动重试 timeout_retries 次以吸收抖动；
+        有副作用的脚本（点击发送/回车/展开参考资料）必须传 timeout_retries=0，
+        避免超时后实际已生效又重复执行（如把停止按钮当发送再点一次）。
         """
 
         wrapped = (
@@ -589,7 +687,25 @@ class EmbeddedBrowserClient:
             "  }\n"
             "})()"
         )
-        raw = await self.bridge.run_javascript(self.account_id, wrapped)
+        raw: Any = None
+        for attempt in range(timeout_retries + 1):
+            try:
+                raw = await self.bridge.run_javascript(self.account_id, wrapped)
+            except Exception as exc:
+                error_text = str(exc).casefold()
+                is_timeout = "超时" in error_text or "timeout" in error_text
+                if is_timeout and attempt < timeout_retries:
+                    LOGGER.info(
+                        "账号 %s 页面脚本执行超时，%.1f 秒后重试（第 %d/%d 次）",
+                        self.account_id,
+                        SCRIPT_TIMEOUT_RETRY_INTERVAL_SECONDS,
+                        attempt + 1,
+                        timeout_retries,
+                    )
+                    await asyncio.sleep(SCRIPT_TIMEOUT_RETRY_INTERVAL_SECONDS)
+                    continue
+                raise
+            break
         if not isinstance(raw, str):
             return raw
         try:
@@ -900,7 +1016,7 @@ class EmbeddedBrowserClient:
                 return False
             # Allow DeepSeek's React state to settle before clicking.
             await asyncio.sleep(0.2)
-            sent = await self._run_script(click_send_script)
+            sent = await self._run_script(click_send_script, timeout_retries=0)
             if not sent:
                 return False
             return await self._wait_for_condition(
@@ -936,7 +1052,7 @@ class EmbeddedBrowserClient:
                   return true;
                 })()
                 """.replace("__COMPOSER_SELECTORS__", composer_selectors)
-            sent = await self._run_script(enter_script)
+            sent = await self._run_script(enter_script, timeout_retries=0)
             if not sent:
                 return False
             return await self._wait_for_condition(
@@ -1011,7 +1127,17 @@ class EmbeddedBrowserClient:
             return result
         return {}
 
+    def _clear_captcha_confirmation(self) -> None:
+        """Clear the confirmed-captcha hold and log the recovery once."""
+
+        if self._captcha_confirmed_until:
+            LOGGER.info("账号 %s 人机验证遮罩已消失，恢复采集", self.account_id)
+            self._captcha_confirmed_until = 0.0
+
     async def _has_visual_captcha(self) -> bool:
+        # 保持期内直接沿用上次确认结论，不重新检测、不重复打日志。
+        if time.monotonic() < self._captcha_confirmed_until:
+            return True
         detected = await self._detect_captcha()
         hit = any(
             detected.get(key)
@@ -1023,24 +1149,77 @@ class EmbeddedBrowserClient:
                 "fullscreenOverlayMatch",
             )
         )
-        if hit:
-            # 命中时输出命中的信号与证据（iframe src、遮罩节点、图片数），
-            # 便于从日志直接判断是真实验证还是误报。
+        if not hit:
+            self._clear_captcha_confirmation()
+            return False
+
+        # 强信号：文字/图片网格/滑块，基本可确认是真实人机验证。
+        strong_signals = any(
+            detected.get(key) for key in ("textMatch", "imageGridMatch", "dragHandleMatch")
+        )
+        if not strong_signals:
+            # 弱信号：只有 iframe 或全屏遮罩（如豆包 verifycenter）。
+            # 豆包会在某些请求后弹出 verifycenter iframe 数秒并自动通过，
+            # 如果立即判定为人工验证会造成严重误报并暂停账号。
+            # 这里等待 4 秒后复查，持续命中才确认。
+            now = time.monotonic()
+            if not self._captcha_weak_last_result and now - self._captcha_weak_last_check < 10.0:
+                LOGGER.debug("账号 %s 弱验证码信号 10 秒内已排除，跳过复查", self.account_id)
+                return False
             LOGGER.warning(
-                "账号 %s 检测到疑似人机验证：textMatch=%s iframeMatch=%s "
-                "imageGridMatch=%s dragHandleMatch=%s fullscreenOverlayMatch=%s "
-                "matchedIframeSrcs=%s overlayInfo=%s imageGridMaxCount=%s imageGridInfo=%s",
+                "账号 %s 检测到弱人机验证信号（疑似静默验证），%.1f 秒后复查："
+                "iframeMatch=%s fullscreenOverlayMatch=%s overlayInfo=%s "
+                "matchedIframeSrcs=%s",
                 self.account_id,
-                detected.get("textMatch"),
+                CAPTCHA_WEAK_CONFIRM_DELAY_SECONDS,
                 detected.get("iframeMatch"),
-                detected.get("imageGridMatch"),
-                detected.get("dragHandleMatch"),
                 detected.get("fullscreenOverlayMatch"),
-                detected.get("matchedIframeSrcs"),
                 detected.get("overlayInfo"),
-                detected.get("imageGridMaxCount"),
-                detected.get("imageGridInfo"),
+                detected.get("matchedIframeSrcs"),
             )
+            await asyncio.sleep(CAPTCHA_WEAK_CONFIRM_DELAY_SECONDS)
+            detected = await self._detect_captcha()
+            hit = any(
+                detected.get(key)
+                for key in (
+                    "textMatch",
+                    "iframeMatch",
+                    "imageGridMatch",
+                    "dragHandleMatch",
+                    "fullscreenOverlayMatch",
+                )
+            )
+            self._captcha_weak_last_check = time.monotonic()
+            self._captcha_weak_last_result = bool(hit)
+            if not hit:
+                self._clear_captcha_confirmation()
+                LOGGER.info(
+                    "账号 %s 弱人机验证信号已自动消失，判定为静默验证，不暂停账号",
+                    self.account_id,
+                )
+                return False
+
+        # 命中时输出命中的信号与证据（iframe src、遮罩节点、图片数），
+        # 便于从日志直接判断是真实验证还是误报。
+        if hit:
+            self._captcha_confirmed_until = time.monotonic() + CAPTCHA_CONFIRMED_HOLD_SECONDS
+        LOGGER.warning(
+            "账号 %s 检测到疑似人机验证：textMatch=%s iframeMatch=%s "
+            "imageGridMatch=%s dragHandleMatch=%s fullscreenOverlayMatch=%s "
+            "matchedIframeSrcs=%s overlayInfo=%s imageGridMaxCount=%s imageGridInfo=%s "
+            "textMatchSource=%r",
+            self.account_id,
+            detected.get("textMatch"),
+            detected.get("iframeMatch"),
+            detected.get("imageGridMatch"),
+            detected.get("dragHandleMatch"),
+            detected.get("fullscreenOverlayMatch"),
+            detected.get("matchedIframeSrcs"),
+            detected.get("overlayInfo"),
+            detected.get("imageGridMaxCount"),
+            detected.get("imageGridInfo"),
+            detected.get("textMatchSource"),
+        )
         return hit
 
     async def _debug_snapshot(self) -> dict[str, Any]:
@@ -1222,6 +1401,9 @@ class EmbeddedBrowserClient:
         self._last_error_code = 0
         self._consecutive_failures = 0
         self._script_timeout_streak = 0
+        self._captcha_weak_last_check = 0.0
+        self._captcha_weak_last_result = False
+        self._captcha_confirmed_until = 0.0
 
     async def screenshot(self) -> bytes:
         if not self._started:
@@ -1353,8 +1535,23 @@ class EmbeddedBrowserClient:
                                     const selector = __REFERENCE_ROWS_SELECTOR__;
                                     referenceReady = document.querySelectorAll(selector).length > 0;
                                   }
-                                  const captchaPattern = __CAPTCHA_PATTERN__;
-                                  const captcha = new RegExp(captchaPattern).test(body);
+                                  const captchaPattern = new RegExp(__CAPTCHA_PATTERN__);
+                                  // 只扫弹层候选节点的短文本，避免回答正文里的
+                                  // “验证码/身份验证”等业务词汇误报。
+                                  let captcha = false;
+                                  const scopeSel = __CAPTCHA_TEXT_SCOPE__;
+                                  for (const node of document.querySelectorAll(scopeSel)) {
+                                    const nodeBox = node.getBoundingClientRect();
+                                    if (nodeBox.width <= 0 || nodeBox.height <= 0) continue;
+                                    const rawText = node.innerText || '';
+                                    const nodeText = rawText.replace(/\s+/g, ' ').trim();
+                                    const tooLong = nodeText.length > __CAPTCHA_TEXT_MAX_LENGTH__;
+                                    if (!nodeText || tooLong) continue;
+                                    if (captchaPattern.test(nodeText)) {
+                                      captcha = true;
+                                      break;
+                                    }
+                                  }
                                   return {
                                     loading,
                                     captcha,
@@ -1365,6 +1562,14 @@ class EmbeddedBrowserClient:
                                 .replace("__REFERENCE_SUMMARY_PATTERN__", reference_summary_pattern)
                                 .replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
                                 .replace("__CAPTCHA_PATTERN__", captcha_pattern)
+                                .replace(
+                                    "__CAPTCHA_TEXT_SCOPE__",
+                                    _captcha_text_scope_selectors(self.platform),
+                                )
+                                .replace(
+                                    "__CAPTCHA_TEXT_MAX_LENGTH__",
+                                    str(CAPTCHA_TEXT_MAX_LENGTH),
+                                )
                             ),
                         )
                         or {}
@@ -1636,7 +1841,7 @@ class EmbeddedBrowserClient:
             .replace("__REFERENCE_ROWS_SELECTOR__", reference_rows_selector)
             .replace("__REFERENCE_EXPAND_SELECTORS__", reference_expand_selectors)
         )
-        expected = (await self._run_script(expected_script)) or 0
+        expected = (await self._run_script(expected_script, timeout_retries=0)) or 0
         await self._wait_for_condition(
             (
                 r"""
@@ -1701,6 +1906,7 @@ class EmbeddedBrowserClient:
                     })()
                     """.replace("__MORE_REFERENCES_TEXT__", more_references_text)
                 ),
+                timeout_retries=0,
             )
             await asyncio.sleep(REFERENCE_POLL_INTERVAL_SECONDS)
             for row in await self._reference_rows():
@@ -1715,22 +1921,34 @@ class EmbeddedBrowserClient:
             if stalled >= 5:
                 break
         if expected and len(rows) < expected:
-            snapshot: dict[str, Any] = {}
-            preview = ""
-            if os.environ.get("DOUBAO_DEBUG"):
-                snapshot = await self._debug_snapshot()
-                snapshot_path = self.user_data_dir / ".doubao-debug-snapshot.json"
-                with suppress(OSError):
-                    snapshot_path.write_text(
-                        json.dumps(snapshot, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                preview = snapshot.get("bodyPreview", "")
-            raise ReferenceExpansionError(
-                f"参考资料未完整展开：页面标明 {expected} 篇，实际识别到 {len(rows)} 篇。"
-                f"页面摘要检测={snapshot.get('hasSummary', 'unknown')}，"
-                f"参考行节点数={snapshot.get('referenceRows', 'unknown')}，"
-                f"展开按钮数={snapshot.get('expandButtons', 'unknown')}，"
-                f"页面预览：{preview[:200]}"
-            )
+            # 豆包 2026-09 起参考资料最多只渲染前 15 条（有时滚动后能多加载
+            # 几条），剩余条目页面上不存在，无法采集。此时不再判任务失败，
+            # 有多少算多少；只有一条都没识别到才认为展开真的失败。
+            if rows:
+                LOGGER.info(
+                    "账号 %s 页面标明 %d 篇参考资料，豆包最多展示前若干条，"
+                    "实际采集 %d 篇，剩余忽略",
+                    self.account_id,
+                    int(expected),
+                    len(rows),
+                )
+            else:
+                snapshot: dict[str, Any] = {}
+                preview = ""
+                if os.environ.get("DOUBAO_DEBUG"):
+                    snapshot = await self._debug_snapshot()
+                    snapshot_path = self.user_data_dir / ".doubao-debug-snapshot.json"
+                    with suppress(OSError):
+                        snapshot_path.write_text(
+                            json.dumps(snapshot, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                    preview = snapshot.get("bodyPreview", "")
+                raise ReferenceExpansionError(
+                    f"参考资料展开失败：页面标明 {expected} 篇，实际识别到 0 篇。"
+                    f"页面摘要检测={snapshot.get('hasSummary', 'unknown')}，"
+                    f"参考行节点数={snapshot.get('referenceRows', 'unknown')}，"
+                    f"展开按钮数={snapshot.get('expandButtons', 'unknown')}，"
+                    f"页面预览：{preview[:200]}"
+                )
         return rows, int(expected)
