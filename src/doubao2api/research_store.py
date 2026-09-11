@@ -1399,6 +1399,7 @@ class ResearchStore:
         self,
         *,
         job_id: str = "",
+        job_ids: list[str] | None = None,
         keyword: str | list[str] = "",
         platform: str = "",
         account_id: str = "",
@@ -1410,6 +1411,7 @@ class ResearchStore:
         key = self._cache_key(
             "list_results",
             job_id=job_id,
+            job_ids=job_ids,
             keyword=keyword,
             platform=platform,
             account_id=account_id,
@@ -1422,6 +1424,7 @@ class ResearchStore:
         def _query() -> list[dict[str, Any]]:
             where, params = self._result_filter(
                 job_id=job_id,
+                job_ids=job_ids,
                 keyword=keyword,
                 platform=platform,
                 account_id=account_id,
@@ -1450,6 +1453,7 @@ class ResearchStore:
         self,
         *,
         job_id: str = "",
+        job_ids: list[str] | None = None,
         keyword: str | list[str] = "",
         platform: str = "",
         account_id: str = "",
@@ -1459,6 +1463,7 @@ class ResearchStore:
         key = self._cache_key(
             "result_dashboard",
             job_id=job_id,
+            job_ids=job_ids,
             keyword=keyword,
             platform=platform,
             account_id=account_id,
@@ -1469,6 +1474,7 @@ class ResearchStore:
         def _query() -> dict[str, Any]:
             where, params = self._result_filter(
                 job_id=job_id,
+                job_ids=job_ids,
                 keyword=keyword,
                 platform=platform,
                 account_id=account_id,

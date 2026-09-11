@@ -58,6 +58,41 @@
 | 平台响应捕获完善 | 实测并补充 DeepSeek 网络响应捕获模式 | `platforms/deepseek.py` |
 | 采集可观测性 | 在日志中记录每个任务的平台、账号、结果数、耗时 | `research_scheduler.py` |
 | 信源频次统计视图 | 基于重复采集数据，按关键词聚合信源的出现次数/出现率（出现轮数 ÷ 总轮数）/最近出现时间，支持导出；Web 端结果表同步轮次列 | `research_store.py`, `native_dashboard.py`, `research_export.py`, `static/index.html` |
+| 静默验证持续性确认（后期） | `_has_visual_captcha` 首次命中后间隔约 4 秒复查，持续命中才判定为人工验证；豆包静默验证（verifycenter iframe 出现几秒后自动通过消失）不再打断任务/暂停账号/弹提醒；配套阅读新一批误报日志验证效果 | `embedded_browser_client.py`, `tests/` |
+
+---
+
+### 体验优化计划（优先实施，已细化待动手）
+
+#### 任务一：采集记录"任务"筛选从单选改为勾选多选
+
+现状：`native_dashboard.py` 采集记录页"筛选与导出"的 `result_job` 是 QComboBox 单选（约 1369 行）；同页关键词筛选已用 `MultiSelectFilter` 组件。
+
+改动点：
+
+- UI：`result_job` 换成 `MultiSelectFilter("全部任务", selection_unit="任务")`，选项为 `(任务名（N 词）, job_id)`，刷新时按值保留勾选状态（`set_options` 已支持）
+- 数据层：`list_results` / `result_dashboard` 增加 `job_ids: list[str] | None` 透传——`_result_filter` 已支持 `job_ids` 列表（长尾页多选时落地），不需要新 SQL
+- 导出：`export_results`（约 4426 行）改从 `selected_values()` 取任务列表；多任务导出时 Excel 命名用"首个任务名 等 N 个任务"
+- 历史页"查看结果"跳转（约 3960 行）：改为 `set_selected_values([job_id])`
+- 重置筛选（约 2534 行）：`setCurrentIndex(0)` 改为 `clear_selection()`
+- 筛选签名/缓存：`filter_signature` 中 `job_id` 改为 `tuple(sorted(job_ids))`
+- 边界约定：不勾选 = 全部任务（与现在"全部任务"等价）；选项列表只含当前有结果的任务
+- 测试：`research_store` 层补 `job_ids` 过滤与多任务聚合测试；UI 手测
+
+#### 任务二：新建采集任务 AI 平台勾选记忆化
+
+现状：`create_job` 成功回调里 `self.job_platforms.clear_selection()`（约 3759 行），每次提交后平台勾选被清空。
+
+改动点：
+
+- 提交成功后不再清空平台勾选（关键词/任务名/账号仍清空）
+- 跨重启持久化：`Settings` 新增 `last_job_ai_platforms: list[str]`，提交成功时写入；新建任务页初始化时 `set_selected_values` 恢复
+- 恢复时与当前平台列表取交集，忽略已不存在的平台 key
+- 模板表单的 `template_platforms` 与账号勾选暂不记忆（用户未提，保持现状）
+
+#### 实施顺序
+
+任务一 → 任务二（同一个 UI 文件，分开提交）；静默验证持续性确认排在后期，与本批误报日志复盘一起做。
 
 ---
 

@@ -290,7 +290,7 @@ D:\ai-source-capturer\doubao-keyword-collector
     - `sync_platform_info()`：按最新规则回填历史记录平台类型。
 - `SourceDistributionChart`：自定义 QPainter 甜甜圈图 + 平台列表。
 - `LongTailChart`：基于 matplotlib 的气泡四象限图，支持悬停提示、X/Y 对数刻度。
-- `MultiSelectFilter`：带搜索、全选/清空的多选下拉（关键词/平台/账号等，支持 `selection_unit` 自定义）。
+- `MultiSelectFilter`：带搜索、全选/清空的多选下拉（任务/关键词/平台/账号等，支持 `selection_unit` 自定义）。采集记录页的任务筛选为多选，不勾选表示全部任务；`list_results`/`result_dashboard` 支持 `job_ids` 列表过滤。
 
 ### 5.14 Web 界面：`static/index.html`
 
@@ -424,7 +424,7 @@ research_schedules (
 
 ### 7.3 验证码/风控处理
 
-- 检测信号（`build_captcha_detect_script()`）：body 文本、可见且有实际尺寸的 iframe URL（隐藏预加载 iframe 不计，防误报）、DOM 选择器（`[class*=...]` 与 `[id*=...]`，覆盖字节验证中心 `#captcha_container`）、九宫格图片（≥6 张同尺寸大图，边长 ≥56px；跨域 iframe 内的图顶层 DOM 看不到，此信号只针对内联验证码）、拖拽元素、fixed/absolute 全屏遮罩（`fullscreenOverlayMatch`，宽高 ≥ 视口 80% 且带遮罩背景或内含可见 iframe）。命中时 WARNING 日志输出各信号值与证据（`matchedIframeSrcs`/`overlayInfo`/`imageGridMaxCount`/`imageGridInfo`），用于快速区分真实验证与误报。
+- 检测信号（`build_captcha_detect_script()`）：弹层范围内的文本（只扫验证码选择器节点与常见弹窗容器，不扫整页 body——回答正文里的“验证码/身份验证”等业务词汇会误报）、可见且有实际尺寸的 iframe URL（隐藏预加载 iframe 不计）、DOM 选择器（`[class*=...]` 与 `[id*=...]`，覆盖字节验证中心 `#captcha_container`）、九宫格图片（≥6 张同尺寸大图，边长 ≥56px；跨域 iframe 内的图顶层 DOM 看不到，此信号只针对内联验证码）、拖拽元素、fixed/absolute 全屏遮罩（`fullscreenOverlayMatch`，宽高 ≥ 视口 80% 且带遮罩背景或内含可见 iframe）。命中时 WARNING 日志输出各信号值与证据（`matchedIframeSrcs`/`overlayInfo`/`imageGridInfo`/`textMatchSource`），用于快速区分真实验证与误报。登录状态脚本与 chat 轮询里的文本检测同样限定在弹层范围。
 - 检测时机：
   1. `inspect_session_state()`：文本检测与结构化检测合并判定 `needs_captcha`（验证内容在跨域 iframe 内，主文档文本不可见，纯文本检测必然漏检）。
   2. `chat()` 填词前：命中即抛带“人机验证”字样的 `RuntimeError`，关键词不发送。

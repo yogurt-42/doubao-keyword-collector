@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -153,6 +154,60 @@ def test_job_and_results_lifecycle(tmp_path: Path) -> None:
     store.delete_job(job["id"])
     assert store.list_jobs() == []
     assert store.list_results() == []
+
+
+def _job_with_result(
+    store: ResearchStore,
+    name: str,
+    keyword: str,
+    link: str,
+) -> dict[str, Any]:
+    job = store.create_job(
+        name=name,
+        keywords=[keyword],
+        account_ids=[],
+        prompt_template="调研 {keyword}",
+        scheduled_at=None,
+        interval_seconds=60,
+        account_cooldown_seconds=0,
+        max_attempts=1,
+    )
+    task = store.due_tasks()[0]
+    assert store.mark_task_running(task["id"], "account-1")
+    store.add_result(
+        task["id"],
+        item={"link": link, "platform": "example.com", "title": "来源"},
+        account_id="account-1",
+    )
+    return job
+
+
+def test_list_results_and_dashboard_filter_by_job_ids(tmp_path: Path) -> None:
+    store = ResearchStore(tmp_path / "research.sqlite3")
+    job_a = _job_with_result(store, "任务A", "关键词甲", "https://a.example.com/1")
+    job_b = _job_with_result(store, "任务B", "关键词乙", "https://b.example.com/1")
+
+    all_rows = store.list_results()
+    assert len(all_rows) == 2
+
+    # 单任务勾选
+    rows_a = store.list_results(job_ids=[job_a["id"]])
+    assert [row["keyword"] for row in rows_a] == ["关键词甲"]
+    dashboard_a = store.result_dashboard(job_ids=[job_a["id"]])
+    assert dashboard_a["summary"]["total"] == 1
+    assert dashboard_a["summary"]["jobs"] == 1
+
+    # 多任务勾选
+    rows_both = store.list_results(job_ids=[job_a["id"], job_b["id"]])
+    assert len(rows_both) == 2
+    dashboard_both = store.result_dashboard(job_ids=[job_a["id"], job_b["id"]])
+    assert dashboard_both["summary"]["total"] == 2
+    assert dashboard_both["summary"]["jobs"] == 2
+
+    # 空列表与 None 都表示“全部任务”
+    assert store.list_results(job_ids=[]) == all_rows
+    assert store.list_results(job_ids=None) == all_rows
+    assert store.result_dashboard(job_ids=[])["summary"]["total"] == 2
 
 
 def test_job_with_failed_keyword_is_failed_history(tmp_path: Path) -> None:

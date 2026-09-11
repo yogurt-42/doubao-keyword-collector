@@ -219,6 +219,15 @@ class MultiSelectFilter(QWidget):
             if (item := self.list_widget.item(index)).checkState() == Qt.CheckState.Checked
         ]
 
+    def options(self) -> list[tuple[str, str]]:
+        return [
+            (
+                self.list_widget.item(index).text(),
+                str(self.list_widget.item(index).data(Qt.ItemDataRole.UserRole)),
+            )
+            for index in range(self.list_widget.count())
+        ]
+
     def select_all(self) -> None:
         self._set_visible_items(Qt.CheckState.Checked)
 
@@ -1366,8 +1375,8 @@ class NativeDashboard(QWidget):
         self.results_filters = QGroupBox("筛选与导出")
         filter_layout = QVBoxLayout(self.results_filters)
         first_row = QHBoxLayout()
-        self.result_job = QComboBox()
-        self.result_job.addItem("全部任务", "")
+        self.result_job = MultiSelectFilter("全部任务", selection_unit="任务")
+        self.result_job.setToolTip("勾选一个或多个任务；不勾选则统计全部任务")
         self.result_keyword = MultiSelectFilter("全部关键词")
         self.result_platform = QComboBox()
         self.result_platform.addItem("全部平台", "")
@@ -2531,7 +2540,7 @@ class NativeDashboard(QWidget):
             combo.setCurrentIndex(selected)
 
     def clear_result_filters(self) -> None:
-        self.result_job.setCurrentIndex(0)
+        self.result_job.clear_selection()
         self.result_keyword.clear_selection()
         self.result_platform.setCurrentIndex(0)
         self.result_account.setCurrentIndex(0)
@@ -3957,11 +3966,10 @@ class NativeDashboard(QWidget):
         )
 
     def show_job_results(self, job_id: str) -> None:
-        index = self.result_job.findData(job_id)
-        if index < 0:
-            self.result_job.addItem("所选任务", job_id)
-            index = self.result_job.count() - 1
-        self.result_job.setCurrentIndex(index)
+        known = {value for _, value in self.result_job.options()}
+        if job_id not in known:
+            self.result_job.set_options([*self.result_job.options(), ("所选任务", job_id)])
+        self.result_job.set_selected_values([job_id])
         self.sections.setCurrentWidget(self.results_page)
         self.refresh_results()
 
@@ -3969,7 +3977,7 @@ class NativeDashboard(QWidget):
         if self.refreshing_results:
             return
         self.refreshing_results = True
-        job_id = str(self.result_job.currentData() or "")
+        job_ids = self.result_job.selected_values()
         keywords = self.result_keyword.selected_values()
         platform = str(self.result_platform.currentData() or "")
         account_id = str(self.result_account.currentData() or "")
@@ -3985,7 +3993,7 @@ class NativeDashboard(QWidget):
 
         def load() -> tuple[Any, ...]:
             filters = {
-                "job_id": job_id,
+                "job_ids": job_ids,
                 "keyword": keywords,
                 "platform": platform,
                 "account_id": account_id,
@@ -4013,7 +4021,7 @@ class NativeDashboard(QWidget):
             rows = rows[:500]
             summary = dashboard["summary"]
             filter_signature = (
-                job_id,
+                tuple(sorted(job_ids)),
                 tuple(keywords),
                 platform,
                 account_id,
@@ -4051,10 +4059,8 @@ class NativeDashboard(QWidget):
             self.result_filter_signature = filter_signature
             self.result_rows = rows
 
-            self._update_combo(
-                self.result_job,
-                [(f"{job['name']}（{job['keyword_count']}）", job["id"]) for job in jobs],
-                "全部任务",
+            self.result_job.set_options(
+                [(f"{job['name']}（{job['keyword_count']}）", job["id"]) for job in jobs]
             )
             self._update_combo(
                 self.result_platform,
@@ -4423,7 +4429,7 @@ class NativeDashboard(QWidget):
             return
         if not filename.casefold().endswith(".xlsx"):
             filename += ".xlsx"
-        job_id = str(self.result_job.currentData() or "")
+        job_ids = self.result_job.selected_values()
         keywords = self.result_keyword.selected_values()
         platform = str(self.result_platform.currentData() or "")
         account_id = str(self.result_account.currentData() or "")
@@ -4435,7 +4441,7 @@ class NativeDashboard(QWidget):
 
         def export() -> int:
             rows = self.backend.research_store.list_results(
-                job_id=job_id,
+                job_ids=job_ids,
                 keyword=keywords,
                 platform=platform,
                 account_id=account_id,

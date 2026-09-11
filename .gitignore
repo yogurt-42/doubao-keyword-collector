@@ -14,3 +14,4 @@ packaging/*.log
 
 # User-facing guides that are maintained locally but not version-controlled by default.
 docs/下载与安装指南.md
+docs/豆包关键词资料采集器-使用手册.docx
